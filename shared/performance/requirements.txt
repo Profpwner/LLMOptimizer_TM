@@ -1,0 +1,23 @@
+# Performance optimization dependencies
+
+# Database drivers and connection pooling
+asyncpg>=0.29.0
+motor>=3.3.2
+neo4j>=5.15.0
+redis[hiredis]>=5.0.1
+
+# Compression
+brotli>=1.1.0
+zstandard>=0.22.0
+
+# Serialization
+msgpack>=1.0.7
+
+# System monitoring
+psutil>=5.9.6
+
+# Performance monitoring
+prometheus-client>=0.19.0
+
+# Async utilities
+aiofiles>=23.2.1

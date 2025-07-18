@@ -1,0 +1,146 @@
+# JWT authentication for external traffic
+---
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: jwt-auth
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: istio-ingressgateway
+  jwtRules:
+  - issuer: "https://auth.llmoptimizer.com"
+    jwksUri: "https://auth.llmoptimizer.com/.well-known/jwks.json"
+    audiences:
+    - "llmoptimizer-api"
+    forwardOriginalToken: true
+  - issuer: "https://accounts.google.com"
+    jwksUri: "https://www.googleapis.com/oauth2/v3/certs"
+    audiences:
+    - "your-google-client-id.apps.googleusercontent.com"
+    forwardOriginalToken: true
+  - issuer: "https://login.microsoftonline.com/your-tenant-id/v2.0"
+    jwksUri: "https://login.microsoftonline.com/your-tenant-id/discovery/v2.0/keys"
+    audiences:
+    - "your-azure-client-id"
+    forwardOriginalToken: true
+---
+# Require JWT for API endpoints
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: require-jwt
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: istio-ingressgateway
+  action: DENY
+  rules:
+  - from:
+    - source:
+        notRequestPrincipals: ["*"]
+    to:
+    - operation:
+        paths: 
+        - "/api/*"
+        notPaths:
+        - "/api/v1/auth/login"
+        - "/api/v1/auth/register"
+        - "/api/v1/auth/refresh"
+        - "/api/v1/oauth/callback/*"
+        - "/api/v1/health"
+        - "/api/v1/metrics"
+---
+# Allow specific paths without authentication
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: allow-public-paths
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: istio-ingressgateway
+  action: ALLOW
+  rules:
+  - to:
+    - operation:
+        paths:
+        - "/api/v1/auth/login"
+        - "/api/v1/auth/register"
+        - "/api/v1/auth/refresh"
+        - "/api/v1/oauth/callback/*"
+        - "/api/v1/health"
+        - "/api/v1/metrics"
+        - "/api/v1/docs"
+        - "/api/v1/openapi.json"
+        methods: ["GET", "POST", "OPTIONS"]
+---
+# Custom JWT claim validation
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: jwt-claim-validation
+  namespace: llmoptimizer
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    when:
+    - key: request.auth.claims[role]
+      values: ["admin", "user", "api-client"]
+  - from:
+    - source:
+        requestPrincipals: ["*"]
+    to:
+    - operation:
+        paths: ["/api/v1/admin/*"]
+    when:
+    - key: request.auth.claims[role]
+      values: ["admin"]
+---
+# Rate limiting based on JWT claims
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: rate-limit-by-tier
+  namespace: llmoptimizer
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  action: CUSTOM
+  provider:
+    name: "rate-limiter"
+  rules:
+  - to:
+    - operation:
+        paths: ["/api/v1/*"]
+    when:
+    - key: request.auth.claims[tier]
+      values: ["free"]
+    - key: request.headers[x-rate-limit]
+      values: ["100"]
+  - to:
+    - operation:
+        paths: ["/api/v1/*"]
+    when:
+    - key: request.auth.claims[tier]
+      values: ["premium"]
+    - key: request.headers[x-rate-limit]
+      values: ["1000"]
+  - to:
+    - operation:
+        paths: ["/api/v1/*"]
+    when:
+    - key: request.auth.claims[tier]
+      values: ["enterprise"]
+    - key: request.headers[x-rate-limit]
+      values: ["10000"]

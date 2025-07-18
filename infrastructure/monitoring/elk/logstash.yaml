@@ -1,0 +1,413 @@
+# Logstash Pipeline Configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: monitoring
+data:
+  logstash.yml: |
+    http.host: "0.0.0.0"
+    xpack.monitoring.enabled: true
+    xpack.monitoring.elasticsearch.hosts: ["https://elasticsearch:9200"]
+    xpack.monitoring.elasticsearch.username: logstash_system
+    xpack.monitoring.elasticsearch.password: "${LOGSTASH_PASSWORD}"
+    xpack.monitoring.elasticsearch.ssl.certificate_authority: /usr/share/logstash/certs/ca.crt
+    
+    pipeline.workers: 4
+    pipeline.batch.size: 250
+    pipeline.batch.delay: 50
+    
+    queue.type: persisted
+    queue.max_bytes: 1gb
+    queue.checkpoint.writes: 1024
+    
+    dead_letter_queue.enable: true
+    dead_letter_queue.max_bytes: 1gb
+    
+    log.level: info
+  
+  pipelines.yml: |
+    - pipeline.id: main
+      path.config: "/usr/share/logstash/pipeline/main.conf"
+      pipeline.workers: 2
+      pipeline.batch.size: 250
+    
+    - pipeline.id: istio
+      path.config: "/usr/share/logstash/pipeline/istio.conf"
+      pipeline.workers: 1
+      pipeline.batch.size: 125
+    
+    - pipeline.id: application
+      path.config: "/usr/share/logstash/pipeline/application.conf"
+      pipeline.workers: 2
+      pipeline.batch.size: 250
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-pipelines
+  namespace: monitoring
+data:
+  main.conf: |
+    input {
+      beats {
+        port => 5044
+        ssl => true
+        ssl_certificate => "/usr/share/logstash/certs/logstash.crt"
+        ssl_key => "/usr/share/logstash/certs/logstash.key"
+        ssl_certificate_authorities => ["/usr/share/logstash/certs/ca.crt"]
+      }
+      
+      http {
+        port => 8080
+        codec => json
+      }
+      
+      tcp {
+        port => 5000
+        codec => json_lines
+      }
+    }
+    
+    filter {
+      # Parse JSON logs
+      if [message] =~ /^\{.*\}$/ {
+        json {
+          source => "message"
+          target => "json"
+        }
+        
+        mutate {
+          rename => {
+            "[json][timestamp]" => "@timestamp"
+            "[json][level]" => "level"
+            "[json][service]" => "service"
+            "[json][trace_id]" => "trace_id"
+            "[json][span_id]" => "span_id"
+            "[json][message]" => "log_message"
+          }
+        }
+      }
+      
+      # Extract Kubernetes metadata
+      if [kubernetes] {
+        mutate {
+          add_field => {
+            "namespace" => "%{[kubernetes][namespace]}"
+            "pod_name" => "%{[kubernetes][pod][name]}"
+            "container_name" => "%{[kubernetes][container][name]}"
+            "node_name" => "%{[kubernetes][node][name]}"
+          }
+        }
+      }
+      
+      # Add environment
+      mutate {
+        add_field => {
+          "environment" => "production"
+          "cluster" => "llmoptimizer-prod"
+        }
+      }
+      
+      # Parse user agent
+      if [user_agent] {
+        useragent {
+          source => "user_agent"
+          target => "user_agent_parsed"
+        }
+      }
+      
+      # GeoIP enrichment
+      if [client_ip] {
+        geoip {
+          source => "client_ip"
+          target => "geoip"
+        }
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch:9200"]
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        user => "logstash_writer"
+        password => "${LOGSTASH_PASSWORD}"
+        index => "logs-%{+YYYY.MM.dd}"
+        template_name => "logs-template"
+      }
+      
+      # Send to monitoring
+      if [level] == "ERROR" or [level] == "CRITICAL" {
+        http {
+          url => "http://alertmanager:9093/api/v1/alerts"
+          http_method => "post"
+          format => "json"
+          mapping => {
+            "labels" => {
+              "alertname" => "ApplicationError"
+              "severity" => "%{level}"
+              "service" => "%{service}"
+              "namespace" => "%{namespace}"
+            }
+            "annotations" => {
+              "summary" => "Application error in %{service}"
+              "description" => "%{log_message}"
+            }
+          }
+        }
+      }
+    }
+  
+  istio.conf: |
+    input {
+      kafka {
+        bootstrap_servers => "kafka:9092"
+        topics => ["istio-access-logs"]
+        group_id => "logstash-istio"
+        codec => json
+      }
+    }
+    
+    filter {
+      # Parse Istio access logs
+      grok {
+        match => {
+          "message" => '\[%{TIMESTAMP_ISO8601:timestamp}\] "%{WORD:method} %{URIPATH:path}(?:%{URIPARAM:params})? %{DATA:protocol}" %{NUMBER:response_code} %{DATA:response_flags} %{NUMBER:bytes_received} %{NUMBER:bytes_sent} %{NUMBER:duration} "%{DATA:downstream_remote_address}" "%{DATA:x_forwarded_for}" "%{DATA:user_agent}" "%{DATA:request_id}" "%{DATA:authority}" "%{DATA:upstream_host}"'
+        }
+      }
+      
+      # Convert numeric fields
+      mutate {
+        convert => {
+          "response_code" => "integer"
+          "bytes_received" => "integer"
+          "bytes_sent" => "integer"
+          "duration" => "integer"
+        }
+      }
+      
+      # Calculate request rate
+      metrics {
+        meter => "request_rate"
+        add_tag => "metric"
+        flush_interval => 60
+        rates => [1, 5, 15]
+      }
+      
+      # Add service mesh metadata
+      mutate {
+        add_field => {
+          "mesh" => "istio"
+          "log_type" => "access_log"
+        }
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch:9200"]
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        user => "logstash_writer"
+        password => "${LOGSTASH_PASSWORD}"
+        index => "istio-access-%{+YYYY.MM.dd}"
+      }
+    }
+  
+  application.conf: |
+    input {
+      redis {
+        host => "redis"
+        port => 6379
+        data_type => "list"
+        key => "application-logs"
+        codec => json
+      }
+    }
+    
+    filter {
+      # Parse application-specific logs
+      if [service] == "ml-service" {
+        # Extract ML metrics
+        if [log_message] =~ /prediction_time/ {
+          grok {
+            match => {
+              "log_message" => "model=%{WORD:model_name} prediction_time=%{NUMBER:prediction_time:float} confidence=%{NUMBER:confidence:float}"
+            }
+          }
+        }
+      }
+      
+      if [service] == "content-service" {
+        # Extract content metrics
+        if [log_message] =~ /content_processed/ {
+          grok {
+            match => {
+              "log_message" => "content_type=%{WORD:content_type} processing_time=%{NUMBER:processing_time:float} quality_score=%{NUMBER:quality_score:float}"
+            }
+          }
+        }
+      }
+      
+      # Add custom tags based on log patterns
+      if [log_message] =~ /ERROR|CRITICAL|FATAL/ {
+        mutate {
+          add_tag => ["alert", "error"]
+        }
+      }
+      
+      if [log_message] =~ /slow query|timeout/ {
+        mutate {
+          add_tag => ["performance", "slow"]
+        }
+      }
+    }
+    
+    output {
+      elasticsearch {
+        hosts => ["https://elasticsearch:9200"]
+        ssl => true
+        cacert => "/usr/share/logstash/certs/ca.crt"
+        user => "logstash_writer"
+        password => "${LOGSTASH_PASSWORD}"
+        index => "app-%{service}-%{+YYYY.MM.dd}"
+      }
+      
+      # Send metrics to Prometheus
+      if "metric" in [tags] {
+        http {
+          url => "http://prometheus-pushgateway:9091/metrics/job/logstash/instance/%{host}"
+          http_method => "post"
+          format => "message"
+          content_type => "text/plain"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: monitoring
+  labels:
+    app: logstash
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+      - name: logstash
+        image: docker.elastic.co/logstash/logstash:8.11.3
+        ports:
+        - containerPort: 5044
+          name: beats
+        - containerPort: 5000
+          name: tcp
+        - containerPort: 8080
+          name: http
+        - containerPort: 9600
+          name: metrics
+        env:
+        - name: LOGSTASH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-credentials
+              key: logstash-password
+        - name: LS_JAVA_OPTS
+          value: "-Xms1g -Xmx1g"
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/logstash/config
+        - name: pipelines
+          mountPath: /usr/share/logstash/pipeline
+        - name: certs
+          mountPath: /usr/share/logstash/certs
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: metrics
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: metrics
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: logstash-config
+      - name: pipelines
+        configMap:
+          name: logstash-pipelines
+      - name: certs
+        secret:
+          secretName: logstash-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: logstash
+  namespace: monitoring
+  labels:
+    app: logstash
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5044
+    targetPort: beats
+    name: beats
+  - port: 5000
+    targetPort: tcp
+    name: tcp
+  - port: 8080
+    targetPort: http
+    name: http
+  - port: 9600
+    targetPort: metrics
+    name: metrics
+  selector:
+    app: logstash
+---
+# HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: logstash-hpa
+  namespace: monitoring
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: logstash
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

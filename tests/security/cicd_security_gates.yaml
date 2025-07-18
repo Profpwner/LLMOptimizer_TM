@@ -1,0 +1,361 @@
+# CI/CD Security Gates Configuration for LLMOptimizer
+# Defines security checkpoints and criteria for build promotion
+
+security_gates:
+  # Pre-commit stage gates
+  pre_commit:
+    - name: "Secret Scanning"
+      tool: "detect-secrets"
+      config:
+        baseline_file: ".secrets.baseline"
+        exclude_files:
+          - ".*\\.lock$"
+          - ".*\\.pyc$"
+          - ".*test.*"
+      fail_on:
+        - new_secrets_detected: true
+        - high_entropy_strings: true
+    
+    - name: "Code Formatting"
+      tool: "pre-commit"
+      hooks:
+        - id: "trailing-whitespace"
+        - id: "end-of-file-fixer"
+        - id: "check-yaml"
+        - id: "check-json"
+        - id: "check-xml"
+        - id: "check-toml"
+        - id: "check-merge-conflict"
+        - id: "check-case-conflict"
+        - id: "detect-private-key"
+        - id: "check-added-large-files"
+          args: ["--maxkb=1000"]
+
+  # Build stage gates
+  build:
+    - name: "Dependency Vulnerability Check"
+      tools:
+        - name: "safety"
+          command: "safety check --json"
+          fail_on:
+            severity: ["critical", "high"]
+            cvss_score: 7.0
+        
+        - name: "npm-audit"
+          command: "npm audit --json"
+          fail_on:
+            severity: ["critical", "high"]
+            
+        - name: "owasp-dependency-check"
+          command: "dependency-check --project LLMOptimizer --scan . --format JSON"
+          fail_on:
+            cvss_score: 7.0
+    
+    - name: "Static Code Analysis"
+      tools:
+        - name: "bandit"
+          command: "bandit -r . -f json -ll"
+          fail_on:
+            severity: ["high"]
+            confidence: ["high", "medium"]
+            
+        - name: "semgrep"
+          command: "semgrep --config=auto --json"
+          fail_on:
+            findings: true
+            severity: ["error"]
+            
+        - name: "sonarqube"
+          command: "sonar-scanner"
+          quality_gates:
+            bugs: 0
+            vulnerabilities: 0
+            code_smells: 10
+            coverage: 80
+            duplicated_lines_density: 5
+            security_hotspots: 0
+    
+    - name: "Container Security"
+      tools:
+        - name: "trivy"
+          command: "trivy image --severity CRITICAL,HIGH --exit-code 1"
+          fail_on:
+            critical_vulnerabilities: 0
+            high_vulnerabilities: 5
+            
+        - name: "docker-bench-security"
+          command: "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock docker/docker-bench-security"
+          fail_on:
+            warn_count: 10
+            fail_count: 0
+    
+    - name: "License Compliance"
+      tool: "license-checker"
+      allowed_licenses:
+        - "MIT"
+        - "Apache-2.0"
+        - "BSD-3-Clause"
+        - "BSD-2-Clause"
+        - "ISC"
+        - "Python-2.0"
+      denied_licenses:
+        - "GPL-3.0"
+        - "AGPL-3.0"
+        - "LGPL-3.0"
+        - "Commercial"
+
+  # Test stage gates
+  test:
+    - name: "Security Unit Tests"
+      command: "pytest tests/security/ -v --junitxml=security-test-results.xml"
+      fail_on:
+        failed_tests: 0
+        test_coverage: 90
+    
+    - name: "Integration Security Tests"
+      command: "pytest tests/integration/security/ -v"
+      fail_on:
+        failed_tests: 0
+    
+    - name: "DAST Scanning"
+      tool: "owasp-zap"
+      config:
+        target_url: "${STAGING_URL}"
+        scan_type: "full"
+        authentication:
+          type: "json"
+          login_url: "${STAGING_URL}/api/auth/login"
+        fail_on:
+          high_alerts: 0
+          medium_alerts: 5
+    
+    - name: "API Security Testing"
+      tool: "postman"
+      collections:
+        - "security-test-collection.json"
+        - "penetration-test-collection.json"
+      fail_on:
+        failed_tests: 0
+        response_time: 2000  # ms
+
+  # Staging deployment gates
+  staging:
+    - name: "Penetration Testing"
+      type: "manual"
+      required_approvers:
+        - "security-team"
+        - "lead-developer"
+      checklist:
+        - "OWASP Top 10 tested"
+        - "Authentication bypass tested"
+        - "Authorization flaws tested"
+        - "Input validation tested"
+        - "Session management tested"
+        - "Cryptography implementation tested"
+    
+    - name: "Performance Security Testing"
+      tools:
+        - name: "artillery"
+          config:
+            target: "${STAGING_URL}"
+            phases:
+              - duration: 60
+                arrivalRate: 100
+              - duration: 120
+                arrivalRate: 500
+            fail_on:
+              error_rate: 1  # percent
+              p95_response_time: 2000  # ms
+    
+    - name: "Compliance Scanning"
+      tools:
+        - name: "openscap"
+          profiles:
+            - "cis-level2"
+            - "pci-dss"
+            - "stig"
+          fail_on:
+            failed_rules: 0
+            score: 90
+
+  # Production deployment gates
+  production:
+    - name: "Change Risk Assessment"
+      type: "automated"
+      criteria:
+        - security_fixes_only: false
+        - high_risk_changes: false
+        - database_migrations: "reviewed"
+        - configuration_changes: "approved"
+        - dependency_updates: "tested"
+    
+    - name: "Security Sign-off"
+      type: "manual"
+      required_approvers:
+        - "security-officer"
+        - "engineering-manager"
+      documents_required:
+        - "security-test-report"
+        - "penetration-test-report"
+        - "dependency-scan-report"
+        - "compliance-report"
+    
+    - name: "Rollback Plan Verification"
+      type: "checklist"
+      items:
+        - "Rollback procedure documented"
+        - "Rollback tested in staging"
+        - "Database rollback scripts ready"
+        - "Feature flags configured"
+        - "Monitoring alerts configured"
+    
+    - name: "Security Monitoring Validation"
+      checks:
+        - "WAF rules updated"
+        - "IDS/IPS signatures current"
+        - "Security alerts configured"
+        - "Incident response team notified"
+        - "Security metrics dashboards ready"
+
+# Gate enforcement policies
+enforcement:
+  # How to handle gate failures
+  failure_actions:
+    pre_commit:
+      action: "block"
+      notify: ["developer"]
+    
+    build:
+      action: "block"
+      notify: ["developer", "team-lead"]
+      
+    test:
+      action: "block"
+      notify: ["developer", "team-lead", "security-team"]
+      create_issue: true
+      
+    staging:
+      action: "require-override"
+      override_approvers: ["security-lead", "engineering-manager"]
+      notify: ["security-team", "engineering-team"]
+      
+    production:
+      action: "block"
+      notify: ["all-stakeholders"]
+      escalate_to: ["cto", "security-officer"]
+
+  # Gate bypass policies (break-glass procedures)
+  bypass_policies:
+    emergency_hotfix:
+      approvers_required: 2
+      approvers:
+        - "security-lead"
+        - "engineering-manager"
+        - "cto"
+      conditions:
+        - "critical-security-vulnerability"
+        - "data-breach-response"
+        - "service-down"
+      audit_log: true
+      post_bypass_actions:
+        - "full-security-scan"
+        - "retrospective-meeting"
+        - "update-procedures"
+
+  # Metrics and reporting
+  metrics:
+    track:
+      - "gate-pass-rate"
+      - "gate-failure-reasons"
+      - "mean-time-to-resolve"
+      - "bypass-frequency"
+      - "security-debt"
+    
+    report_frequency: "weekly"
+    report_recipients:
+      - "security-team"
+      - "engineering-management"
+      - "compliance-team"
+
+# Integration with CI/CD platforms
+integrations:
+  github_actions:
+    status_checks:
+      - context: "security/dependency-check"
+        required: true
+      - context: "security/static-analysis"
+        required: true
+      - context: "security/container-scan"
+        required: true
+      - context: "security/unit-tests"
+        required: true
+    
+    branch_protection:
+      required_reviews: 2
+      dismiss_stale_reviews: true
+      require_code_owner_reviews: true
+      required_status_checks: true
+      enforce_admins: true
+      restrictions:
+        users: []
+        teams: ["security-team"]
+  
+  jenkins:
+    pipeline_library: "security-gates-library"
+    shared_libraries:
+      - name: "security-gates"
+        version: "main"
+        retriever:
+          modernSCM:
+            scm:
+              git:
+                remote: "https://github.com/llmoptimizer/jenkins-security-library.git"
+  
+  gitlab:
+    compliance_framework: "SOC2-Security"
+    merge_request_approvals:
+      approvals_required: 2
+      approval_rules:
+        - name: "Security Review"
+          approvers:
+            - "@security-team"
+          contains_security_changes: true
+    
+    security_policies:
+      - type: "scan_execution_policy"
+        name: "Security Scan Policy"
+        enabled: true
+        rules:
+          - type: "pipeline"
+            branches: ["main", "develop"]
+        actions:
+          - scan: "dast"
+          - scan: "secret_detection"
+          - scan: "sast"
+          - scan: "dependency_scanning"
+          - scan: "container_scanning"
+
+# Notifications and alerting
+notifications:
+  channels:
+    - type: "slack"
+      webhook_url: "${SLACK_SECURITY_WEBHOOK}"
+      channel: "#security-gates"
+      mentions:
+        critical: "@channel"
+        high: "@security-team"
+    
+    - type: "email"
+      smtp_server: "${SMTP_SERVER}"
+      recipients:
+        default: ["security@llmoptimizer.com"]
+        escalation: ["cto@llmoptimizer.com", "security-lead@llmoptimizer.com"]
+    
+    - type: "pagerduty"
+      api_key: "${PAGERDUTY_API_KEY}"
+      service_key: "${PAGERDUTY_SECURITY_SERVICE}"
+      severity_mapping:
+        critical: "critical"
+        high: "error"
+        medium: "warning"
+        low: "info"

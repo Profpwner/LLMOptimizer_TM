@@ -1,0 +1,288 @@
+# OWASP ZAP Configuration for LLMOptimizer Security Testing
+
+env:
+  contexts:
+    - name: "LLMOptimizer"
+      urls:
+        - "https://api.llmoptimizer.com"
+        - "https://dashboard.llmoptimizer.com"
+      includePaths:
+        - "https://api.llmoptimizer.com/api/.*"
+        - "https://dashboard.llmoptimizer.com/.*"
+      excludePaths:
+        - ".*\\.js"
+        - ".*\\.css"
+        - ".*\\.png"
+        - ".*\\.jpg"
+        - ".*\\.gif"
+        - ".*\\.ico"
+        - ".*\\.woff.*"
+        - ".*/logout"
+      authentication:
+        method: "json"
+        loginUrl: "https://api.llmoptimizer.com/api/auth/login"
+        loginRequestData: '{"username":"{%username%}","password":"{%password%}"}'
+        usernameParameter: "username"
+        passwordParameter: "password"
+        loggedInIndicator: '"authenticated":true'
+        loggedOutIndicator: '"authenticated":false'
+      sessionManagement:
+        method: "cookie"
+        sessionTokens:
+          - "session_id"
+          - "auth_token"
+      technology:
+        include:
+          - "Python"
+          - "PostgreSQL"
+          - "MongoDB"
+          - "Redis"
+          - "JavaScript"
+          - "React"
+        exclude:
+          - "PHP"
+          - "ASP"
+
+policies:
+  - name: "API_Security_Policy"
+    rules:
+      - id: 10003  # Vulnerable JS Library
+        threshold: "High"
+      - id: 10010  # Cookie No HttpOnly Flag
+        threshold: "Medium"
+      - id: 10011  # Cookie Without Secure Flag
+        threshold: "High"
+      - id: 10015  # Incomplete or No Cache-control and Pragma HTTP Header Set
+        threshold: "Low"
+      - id: 10016  # Web Browser XSS Protection Not Enabled
+        threshold: "Medium"
+      - id: 10017  # Cross-Domain JavaScript Source File Inclusion
+        threshold: "Medium"
+      - id: 10019  # Content-Type Header Missing
+        threshold: "Low"
+      - id: 10020  # X-Frame-Options Header Not Set
+        threshold: "Medium"
+      - id: 10021  # X-Content-Type-Options Header Missing
+        threshold: "Medium"
+      - id: 10023  # Information Disclosure - Debug Error Messages
+        threshold: "High"
+      - id: 10024  # Information Disclosure - Sensitive Information in URL
+        threshold: "High"
+      - id: 10025  # Information Disclosure - Sensitive Information in HTTP Referrer Header
+        threshold: "Medium"
+      - id: 10027  # Information Disclosure - Suspicious Comments
+        threshold: "Low"
+      - id: 10032  # Viewstate Without MAC Signature
+        threshold: "High"
+      - id: 10040  # Secure Pages Include Mixed Content
+        threshold: "Medium"
+      - id: 10105  # Weak Authentication Method
+        threshold: "High"
+      - id: 10202  # Absence of Anti-CSRF Tokens
+        threshold: "High"
+      - id: 40003  # CRLF Injection
+        threshold: "High"
+      - id: 40008  # Parameter Tampering
+        threshold: "Medium"
+      - id: 40009  # Server Side Include
+        threshold: "High"
+      - id: 40012  # Cross Site Request Forgery
+        threshold: "High"
+      - id: 40013  # Session Fixation
+        threshold: "High"
+      - id: 40014  # Persistent XSS
+        threshold: "High"
+      - id: 40016  # Cross-Domain Misconfiguration
+        threshold: "Medium"
+      - id: 40017  # Cross-Domain JavaScript Source File Inclusion
+        threshold: "Medium"
+      - id: 40019  # External Redirect
+        threshold: "Medium"
+      - id: 40020  # Path Traversal
+        threshold: "High"
+      - id: 40021  # Path Traversal
+        threshold: "High"
+      - id: 40022  # SQL Injection - SQLite
+        threshold: "High"
+      - id: 40023  # Possible Username Enumeration
+        threshold: "Medium"
+      - id: 40024  # SQL Injection - MsSQL
+        threshold: "High"
+      - id: 40026  # Cross Site Scripting (DOM Based)
+        threshold: "High"
+      - id: 40027  # SQL Injection - MsSQL
+        threshold: "High"
+      - id: 40028  # ELMAH Information Leak
+        threshold: "Medium"
+      - id: 40029  # Trace.axd Information Leak
+        threshold: "Medium"
+      - id: 40034  # .htaccess Information Leak
+        threshold: "Medium"
+      - id: 90001  # Insecure JSF ViewState
+        threshold: "High"
+      - id: 90011  # Charset Mismatch
+        threshold: "Low"
+      - id: 90022  # Application Error Disclosure
+        threshold: "Medium"
+      - id: 90033  # Loosely Scoped Cookie
+        threshold: "Low"
+
+scanners:
+  active:
+    - id: 0     # Directory Browsing
+      strength: "High"
+    - id: 2     # Private IP Disclosure
+      strength: "High"
+    - id: 3     # Session ID in URL Rewrite
+      strength: "High"
+    - id: 4     # Obsolete File
+      strength: "High"
+    - id: 5     # Vulnerable JS Library
+      strength: "High"
+    - id: 6     # Path Traversal
+      strength: "High"
+    - id: 7     # Remote File Include
+      strength: "High"
+    - id: 40    # LDAP Injection
+      strength: "High"
+    - id: 41    # Source Code Disclosure - /WEB-INF folder
+      strength: "High"
+    - id: 42    # Spring Actuator Information Leak
+      strength: "High"
+    - id: 43    # Source Code Disclosure - File Inclusion
+      strength: "High"
+    - id: 50000 # Script Active Scan Rules
+      strength: "High"
+    - id: 90019 # Server Side Code Injection
+      strength: "High"
+    - id: 90020 # Remote OS Command Injection
+      strength: "High"
+    - id: 90021 # XPath Injection
+      strength: "High"
+    - id: 90023 # XML External Entity Attack
+      strength: "High"
+    - id: 90024 # Generic Padding Oracle
+      strength: "High"
+    - id: 90025 # Expression Language Injection
+      strength: "High"
+    - id: 90028 # Insecure HTTP Method
+      strength: "High"
+    - id: 90034 # Cloud Metadata Attack
+      strength: "High"
+
+  passive:
+    - id: 2     # Private IP Disclosure
+    - id: 3     # Session ID in URL Rewrite
+    - id: 10003 # Vulnerable JS Library
+    - id: 10010 # Cookie No HttpOnly Flag
+    - id: 10011 # Cookie Without Secure Flag
+    - id: 10015 # Re-examine Cache-control Directives
+    - id: 10016 # Web Browser XSS Protection Not Enabled
+    - id: 10017 # Cross-Domain JavaScript Source File Inclusion
+    - id: 10019 # Content-Type Header Missing
+    - id: 10020 # Anti-clickjacking Header
+    - id: 10021 # X-Content-Type-Options Header Missing
+    - id: 10023 # Information Disclosure - Debug Error Messages
+    - id: 10024 # Information Disclosure - Sensitive Information in URL
+    - id: 10025 # Information Disclosure - Sensitive Information in HTTP Referrer Header
+    - id: 10026 # HTTP Parameter Override
+    - id: 10027 # Information Disclosure - Suspicious Comments
+    - id: 10028 # Open Redirect
+    - id: 10029 # Cookie Poisoning
+    - id: 10030 # User Controllable Charset
+    - id: 10031 # User Controllable HTML Element Attribute (Potential XSS)
+    - id: 10032 # Viewstate
+    - id: 10033 # Directory Browsing
+    - id: 10034 # Heartbleed OpenSSL Vulnerability
+    - id: 10035 # Strict-Transport-Security Header
+    - id: 10036 # HTTP Server Response Header
+    - id: 10037 # Server Leaks Information via "X-Powered-By" HTTP Response Header Field(s)
+    - id: 10038 # Content Security Policy (CSP) Header Not Set
+    - id: 10039 # X-Backend-Server Header Information Leak
+    - id: 10040 # Secure Pages Include Mixed Content
+    - id: 10041 # HTTP to HTTPS Insecure Transition in Form Post
+    - id: 10042 # HTTPS to HTTP Insecure Transition in Form Post
+    - id: 10043 # User Controllable JavaScript Event (XSS)
+    - id: 10044 # Big Redirect Detected (Potential Sensitive Information Leak)
+    - id: 10045 # Source Code Disclosure - /WEB-INF folder
+    - id: 10048 # Remote Code Execution - Shell Shock
+    - id: 10049 # Storable and Cacheable Content
+    - id: 10050 # Retrieved from Cache
+    - id: 10052 # X-ChromeLogger-Data Header Information Leak
+    - id: 10054 # Cookie without SameSite Attribute
+    - id: 10055 # CSP Scanner
+    - id: 10056 # X-Debug-Token Information Leak
+    - id: 10057 # Username Hash Found
+    - id: 10061 # X-AspNet-Version Response Header
+    - id: 10062 # PII Disclosure
+    - id: 10094 # Base64 Disclosure
+    - id: 10095 # Backup File Disclosure
+    - id: 10096 # Timestamp Disclosure
+    - id: 10097 # Hash Disclosure
+    - id: 10098 # Cross-Domain Misconfiguration
+    - id: 10099 # Source Code Disclosure
+    - id: 10105 # Weak Authentication Method
+    - id: 10108 # Reverse Tabnabbing
+    - id: 10109 # Modern Web Application
+    - id: 10110 # Dangerous JS Functions
+    - id: 10202 # Absence of Anti-CSRF Tokens
+
+reporting:
+  template: "traditional-json"
+  reportDir: "/reports"
+  reportFileNamePattern: "ZAP_Report_{timestamp}"
+  reportTitle: "LLMOptimizer Security Test Report"
+  reportDescription: "Automated security testing results for LLMOptimizer platform"
+  includedConfidences:
+    - "High"
+    - "Medium"
+    - "Low"
+  includedRisks:
+    - "High"
+    - "Medium"
+    - "Low"
+    - "Informational"
+
+automation:
+  parameters:
+    failOnError: true
+    failOnWarning: false
+    progressToStdout: true
+  jobs:
+    - name: "passiveScan-config"
+      type: "passiveScan-config"
+      parameters:
+        maxAlertsPerRule: 10
+        scanOnlyInScope: true
+    
+    - name: "spider"
+      type: "spider"
+      parameters:
+        context: "LLMOptimizer"
+        maxDuration: 60
+        maxDepth: 10
+        maxChildren: 20
+    
+    - name: "passiveScan-wait"
+      type: "passiveScan-wait"
+      parameters:
+        maxDuration: 10
+    
+    - name: "activeScan"
+      type: "activeScan"
+      parameters:
+        context: "LLMOptimizer"
+        maxRuleDurationInMins: 5
+        maxScanDurationInMins: 120
+        delayInMs: 20
+        handleAntiCSRFTokens: true
+        threadPerHost: 5
+        policy: "API_Security_Policy"
+    
+    - name: "report"
+      type: "report"
+      parameters:
+        template: "traditional-json"
+        reportDir: "/reports"
+        reportTitle: "LLMOptimizer Security Test Report"
+        reportDescription: "Automated security testing results"

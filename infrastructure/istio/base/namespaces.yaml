@@ -1,0 +1,62 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    istio-injection: disabled
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llmoptimizer
+  labels:
+    istio-injection: enabled
+    # Network segmentation
+    istio.io/dataplane-mode: standard
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llmoptimizer-staging
+  labels:
+    istio-injection: enabled
+    istio.io/dataplane-mode: standard
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    istio-injection: enabled
+    istio.io/dataplane-mode: standard
+---
+# Sidecar configuration for the llmoptimizer namespace
+apiVersion: networking.istio.io/v1beta1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: llmoptimizer
+spec:
+  egress:
+  - hosts:
+    - "./*"
+    - "istio-system/*"
+    - "monitoring/*"
+  outboundTrafficPolicy:
+    mode: REGISTRY_ONLY
+---
+# Sidecar configuration for monitoring namespace
+apiVersion: networking.istio.io/v1beta1
+kind: Sidecar
+metadata:
+  name: default
+  namespace: monitoring
+spec:
+  egress:
+  - hosts:
+    - "./*"
+    - "istio-system/*"
+    - "llmoptimizer/*"
+  outboundTrafficPolicy:
+    mode: ALLOW_ANY  # Allow monitoring tools to reach external services

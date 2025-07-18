@@ -1,0 +1,250 @@
+# Vertical Pod Autoscaler configurations for LLMOptimizer services
+# Optimizes resource requests and limits based on actual usage
+
+---
+# API Gateway VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: api-gateway-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api-gateway
+  updatePolicy:
+    updateMode: "Auto"  # Can be "Off", "Initial", "Recreate", or "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: api-gateway
+      minAllowed:
+        cpu: 200m
+        memory: 256Mi
+      maxAllowed:
+        cpu: 4000m
+        memory: 8Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+
+---
+# Auth Service VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: auth-service-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: auth-service
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: auth-service
+      minAllowed:
+        cpu: 100m
+        memory: 128Mi
+      maxAllowed:
+        cpu: 2000m
+        memory: 4Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+
+---
+# ML Service VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: ml-service-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ml-service
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: ml-service
+      minAllowed:
+        cpu: 1000m
+        memory: 2Gi
+      maxAllowed:
+        cpu: 8000m
+        memory: 32Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+    # For GPU resources (if applicable)
+    - containerName: ml-service
+      minAllowed:
+        nvidia.com/gpu: 1
+      maxAllowed:
+        nvidia.com/gpu: 4
+      controlledResources: ["nvidia.com/gpu"]
+
+---
+# Content Service VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: content-service-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: content-service
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: content-service
+      minAllowed:
+        cpu: 200m
+        memory: 512Mi
+      maxAllowed:
+        cpu: 4000m
+        memory: 8Gi
+      controlledResources: ["cpu", "memory"]
+
+---
+# Analytics Service VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: analytics-service-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: analytics-service
+  updatePolicy:
+    updateMode: "Initial"  # Only set resources on pod creation
+  resourcePolicy:
+    containerPolicies:
+    - containerName: analytics-service
+      minAllowed:
+        cpu: 500m
+        memory: 1Gi
+      maxAllowed:
+        cpu: 4000m
+        memory: 16Gi
+
+---
+# Database Services VPA (for database proxies/poolers)
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: pgbouncer-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pgbouncer
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: pgbouncer
+      minAllowed:
+        cpu: 200m
+        memory: 256Mi
+      maxAllowed:
+        cpu: 2000m
+        memory: 2Gi
+      controlledResources: ["cpu", "memory"]
+
+---
+# Redis VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: redis-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: redis-master
+  updatePolicy:
+    updateMode: "Off"  # Manual updates only for stateful services
+  resourcePolicy:
+    containerPolicies:
+    - containerName: redis
+      minAllowed:
+        cpu: 500m
+        memory: 2Gi
+      maxAllowed:
+        cpu: 4000m
+        memory: 64Gi
+      controlledResources: ["cpu", "memory"]
+
+---
+# LLM Monitoring Service VPA
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: llm-monitoring-vpa
+  namespace: llmoptimizer
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: llm-monitoring
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: llm-monitoring
+      minAllowed:
+        cpu: 500m
+        memory: 1Gi
+      maxAllowed:
+        cpu: 4000m
+        memory: 8Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+
+---
+# VPA Recommender Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpa-recommender-config
+  namespace: kube-system
+data:
+  config.yaml: |
+    # VPA Recommender configuration for optimal resource allocation
+    recommender:
+      # How often to fetch metrics
+      metricsFetchInterval: 1m
+      # How often to compute recommendations
+      recommendationMarginFraction: 0.15
+      # Pod lifetime to consider for recommendations
+      podMinCPUMillicores: 25
+      podMinMemoryMb: 50
+      # Safety margins
+      safetyMarginFraction: 0.15
+      # Recommendation bounds
+      targetCPUPercentile: 0.9
+      targetMemoryPercentile: 0.9
+      # History
+      historyLength: 8d
+      historyResolution: 1h
+      # CPU histogram configuration
+      cpuHistogramDecayHalfLife: 24h
+      memoryHistogramDecayHalfLife: 24h
+      # Memory aggregation
+      memoryAggregationInterval: 24h
+      memoryAggregationIntervalCount: 8
+      # Minimum samples
+      minSampleWeight: 0.1
+      # OOM handling
+      oomMinBumpUp: 1.1
+      oomBumpUpRatio: 1.2

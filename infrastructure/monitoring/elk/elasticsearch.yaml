@@ -1,0 +1,315 @@
+# Elasticsearch Cluster for Log Storage
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-config
+  namespace: monitoring
+data:
+  elasticsearch.yml: |
+    cluster.name: llmoptimizer-logs
+    network.host: 0.0.0.0
+    discovery.seed_hosts:
+      - elasticsearch-0.elasticsearch-headless.monitoring.svc.cluster.local
+      - elasticsearch-1.elasticsearch-headless.monitoring.svc.cluster.local
+      - elasticsearch-2.elasticsearch-headless.monitoring.svc.cluster.local
+    cluster.initial_master_nodes:
+      - elasticsearch-0
+      - elasticsearch-1
+      - elasticsearch-2
+    node.name: ${POD_NAME}
+    node.data: true
+    node.master: true
+    node.ingest: true
+    
+    # Security settings
+    xpack.security.enabled: true
+    xpack.security.transport.ssl.enabled: true
+    xpack.security.transport.ssl.verification_mode: certificate
+    xpack.security.transport.ssl.keystore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+    xpack.security.transport.ssl.truststore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+    xpack.security.http.ssl.enabled: true
+    xpack.security.http.ssl.keystore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+    xpack.security.http.ssl.truststore.path: /usr/share/elasticsearch/config/certs/elastic-certificates.p12
+    
+    # Performance settings
+    indices.memory.index_buffer_size: 30%
+    thread_pool.write.queue_size: 500
+    thread_pool.search.queue_size: 500
+    
+    # ILM settings
+    xpack.ilm.enabled: true
+    
+    # Machine learning
+    xpack.ml.enabled: false
+    
+    # Monitoring
+    xpack.monitoring.enabled: true
+    xpack.monitoring.collection.enabled: true
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: elasticsearch-credentials
+  namespace: monitoring
+type: Opaque
+stringData:
+  elastic-password: "changeme-elastic-password"
+  kibana-password: "changeme-kibana-password"
+  logstash-password: "changeme-logstash-password"
+  beats-password: "changeme-beats-password"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: monitoring
+  labels:
+    app: elasticsearch
+spec:
+  serviceName: elasticsearch-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      initContainers:
+      - name: configure-sysctl
+        image: busybox:1.36
+        command: ["sysctl", "-w", "vm.max_map_count=262144"]
+        securityContext:
+          privileged: true
+      - name: configure-permissions
+        image: busybox:1.36
+        command: ["sh", "-c", "chown -R 1000:1000 /usr/share/elasticsearch/data"]
+        volumeMounts:
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+      containers:
+      - name: elasticsearch
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+        ports:
+        - containerPort: 9200
+          name: http
+        - containerPort: 9300
+          name: transport
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: ES_JAVA_OPTS
+          value: "-Xms2g -Xmx2g"
+        - name: ELASTIC_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-credentials
+              key: elastic-password
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/elasticsearch/config/elasticsearch.yml
+          subPath: elasticsearch.yml
+        - name: data
+          mountPath: /usr/share/elasticsearch/data
+        - name: certs
+          mountPath: /usr/share/elasticsearch/config/certs
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 4Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /_cluster/health
+            port: http
+            scheme: HTTPS
+            httpHeaders:
+            - name: Authorization
+              value: Basic ZWxhc3RpYzpjaGFuZ2VtZS1lbGFzdGljLXBhc3N3b3Jk
+          initialDelaySeconds: 120
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /_cluster/health
+            port: http
+            scheme: HTTPS
+            httpHeaders:
+            - name: Authorization
+              value: Basic ZWxhc3RpYzpjaGFuZ2VtZS1lbGFzdGljLXBhc3N3b3Jk
+          initialDelaySeconds: 60
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: elasticsearch-config
+      - name: certs
+        secret:
+          secretName: elasticsearch-certs
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: fast-ssd
+      resources:
+        requests:
+          storage: 100Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: monitoring
+  labels:
+    app: elasticsearch
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9200
+    targetPort: http
+    name: http
+  selector:
+    app: elasticsearch
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-headless
+  namespace: monitoring
+  labels:
+    app: elasticsearch
+spec:
+  clusterIP: None
+  ports:
+  - port: 9200
+    targetPort: http
+    name: http
+  - port: 9300
+    targetPort: transport
+    name: transport
+  selector:
+    app: elasticsearch
+---
+# Index Lifecycle Management Policies
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticsearch-ilm-policies
+  namespace: monitoring
+data:
+  setup-ilm.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Wait for Elasticsearch to be ready
+    until curl -s -u elastic:${ELASTIC_PASSWORD} -k https://elasticsearch:9200/_cluster/health | grep -q '"status":"green"'; do
+      echo "Waiting for Elasticsearch to be ready..."
+      sleep 10
+    done
+    
+    # Create ILM policy for logs
+    curl -X PUT -u elastic:${ELASTIC_PASSWORD} -k \
+      "https://elasticsearch:9200/_ilm/policy/logs-policy" \
+      -H "Content-Type: application/json" -d '{
+      "policy": {
+        "phases": {
+          "hot": {
+            "min_age": "0ms",
+            "actions": {
+              "rollover": {
+                "max_age": "1d",
+                "max_size": "50GB",
+                "max_docs": 50000000
+              },
+              "set_priority": {
+                "priority": 100
+              }
+            }
+          },
+          "warm": {
+            "min_age": "2d",
+            "actions": {
+              "shrink": {
+                "number_of_shards": 1
+              },
+              "forcemerge": {
+                "max_num_segments": 1
+              },
+              "set_priority": {
+                "priority": 50
+              }
+            }
+          },
+          "cold": {
+            "min_age": "7d",
+            "actions": {
+              "set_priority": {
+                "priority": 0
+              },
+              "allocate": {
+                "require": {
+                  "data": "cold"
+                }
+              }
+            }
+          },
+          "delete": {
+            "min_age": "30d",
+            "actions": {
+              "delete": {}
+            }
+          }
+        }
+      }
+    }'
+    
+    # Create index template
+    curl -X PUT -u elastic:${ELASTIC_PASSWORD} -k \
+      "https://elasticsearch:9200/_index_template/logs-template" \
+      -H "Content-Type: application/json" -d '{
+      "index_patterns": ["logs-*", "filebeat-*", "logstash-*"],
+      "template": {
+        "settings": {
+          "number_of_shards": 3,
+          "number_of_replicas": 1,
+          "index.lifecycle.name": "logs-policy",
+          "index.lifecycle.rollover_alias": "logs"
+        },
+        "mappings": {
+          "properties": {
+            "@timestamp": {
+              "type": "date"
+            },
+            "message": {
+              "type": "text",
+              "fields": {
+                "keyword": {
+                  "type": "keyword",
+                  "ignore_above": 256
+                }
+              }
+            },
+            "level": {
+              "type": "keyword"
+            },
+            "service": {
+              "type": "keyword"
+            },
+            "trace_id": {
+              "type": "keyword"
+            },
+            "span_id": {
+              "type": "keyword"
+            }
+          }
+        }
+      }
+    }'
+    
+    echo "ILM policies and templates created successfully"

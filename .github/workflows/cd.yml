@@ -1,0 +1,170 @@
+name: CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: llm-optimizer-cluster
+
+jobs:
+  deploy-staging:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event.inputs.environment == 'staging')
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }}-staging --region ${{ env.AWS_REGION }}
+    
+    - name: Deploy to staging
+      run: |
+        cd infrastructure/kubernetes
+        kubectl apply -f namespace-staging.yaml
+        kubectl apply -f . -n llm-optimizer-staging
+        kubectl set image deployment/backend backend=llmoptimizer/backend:${{ github.sha }} -n llm-optimizer-staging
+        kubectl set image deployment/frontend frontend=llmoptimizer/frontend:${{ github.sha }} -n llm-optimizer-staging
+        kubectl rollout status deployment/backend -n llm-optimizer-staging
+        kubectl rollout status deployment/frontend -n llm-optimizer-staging
+    
+    - name: Run smoke tests
+      run: |
+        cd tests/smoke
+        npm install
+        ENVIRONMENT=staging npm test
+    
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: 'Staging deployment ${{ job.status }}'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+  deploy-production:
+    if: github.event.inputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: production
+    needs: deploy-staging
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }}-prod --region ${{ env.AWS_REGION }}
+    
+    - name: Blue-Green Deployment
+      run: |
+        cd infrastructure/kubernetes
+        
+        # Deploy to green environment
+        kubectl apply -f namespace-prod.yaml
+        kubectl apply -f . -n llm-optimizer-prod-green
+        kubectl set image deployment/backend backend=llmoptimizer/backend:${{ github.sha }} -n llm-optimizer-prod-green
+        kubectl set image deployment/frontend frontend=llmoptimizer/frontend:${{ github.sha }} -n llm-optimizer-prod-green
+        
+        # Wait for green deployment to be ready
+        kubectl rollout status deployment/backend -n llm-optimizer-prod-green
+        kubectl rollout status deployment/frontend -n llm-optimizer-prod-green
+        
+        # Run production tests on green
+        cd ../../tests/production
+        npm install
+        ENVIRONMENT=production-green npm test
+        
+        # Switch traffic to green
+        kubectl patch service backend -n llm-optimizer-prod -p '{"spec":{"selector":{"version":"green"}}}'
+        kubectl patch service frontend -n llm-optimizer-prod -p '{"spec":{"selector":{"version":"green"}}}'
+        
+        # Wait and monitor
+        sleep 300  # 5 minutes monitoring period
+        
+        # If successful, update blue environment for next deployment
+        kubectl set image deployment/backend backend=llmoptimizer/backend:${{ github.sha }} -n llm-optimizer-prod-blue
+        kubectl set image deployment/frontend frontend=llmoptimizer/frontend:${{ github.sha }} -n llm-optimizer-prod-blue
+    
+    - name: Create release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release v${{ github.run_number }}
+        body: |
+          Production deployment of commit ${{ github.sha }}
+          
+          Changes:
+          - See commit history for details
+        draft: false
+        prerelease: false
+    
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: 'Production deployment ${{ job.status }}'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        
+  rollback:
+    if: failure()
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+        aws-region: ${{ env.AWS_REGION }}
+    
+    - name: Rollback deployment
+      run: |
+        aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }}-prod --region ${{ env.AWS_REGION }}
+        
+        # Switch traffic back to blue
+        kubectl patch service backend -n llm-optimizer-prod -p '{"spec":{"selector":{"version":"blue"}}}'
+        kubectl patch service frontend -n llm-optimizer-prod -p '{"spec":{"selector":{"version":"blue"}}}'
+        
+        echo "Rollback completed - traffic switched to blue environment"
+    
+    - name: Notify Slack - Rollback
+      uses: 8398a7/action-slack@v3
+      with:
+        status: custom
+        custom_payload: |
+          {
+            text: "⚠️ Production deployment rolled back",
+            attachments: [{
+              color: 'warning',
+              text: 'Deployment of ${{ github.sha }} failed and was rolled back'
+            }]
+          }
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}

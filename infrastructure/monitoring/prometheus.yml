@@ -1,0 +1,232 @@
+# Prometheus configuration for LLMOptimizer
+# Optimized for 100K+ concurrent users
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    environment: 'production'
+    cluster: 'llmoptimizer-primary'
+    region: 'us-east-1'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets:
+      - alertmanager:9093
+    scheme: http
+    timeout: 10s
+    api_version: v2
+
+# Load alerting rules
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+# Remote storage configuration for long-term retention
+remote_write:
+  - url: http://thanos-receive:19291/api/v1/receive
+    queue_config:
+      capacity: 100000
+      max_shards: 200
+      min_shards: 20
+      max_samples_per_send: 10000
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 100ms
+    write_relabel_configs:
+    - source_labels: [__name__]
+      regex: '(prometheus_|node_|container_).*'
+      action: keep
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+    - targets: ['localhost:9090']
+    metrics_path: '/metrics'
+
+  # Node Exporter for system metrics
+  - job_name: 'node-exporter'
+    kubernetes_sd_configs:
+    - role: node
+    relabel_configs:
+    - source_labels: [__address__]
+      regex: '(.*):10250'
+      replacement: '${1}:9100'
+      target_label: __address__
+    - action: labelmap
+      regex: __meta_kubernetes_node_label_(.+)
+    - source_labels: [__meta_kubernetes_node_name]
+      target_label: node
+
+  # Kubernetes metrics
+  - job_name: 'kubernetes-apiservers'
+    kubernetes_sd_configs:
+    - role: endpoints
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+      action: keep
+      regex: default;kubernetes;https
+
+  # Kubernetes pods
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+      action: replace
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+      target_label: __address__
+    - action: labelmap
+      regex: __meta_kubernetes_pod_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      action: replace
+      target_label: kubernetes_namespace
+    - source_labels: [__meta_kubernetes_pod_name]
+      action: replace
+      target_label: kubernetes_pod_name
+
+  # LLMOptimizer services
+  - job_name: 'llmoptimizer-services'
+    kubernetes_sd_configs:
+    - role: endpoints
+      namespaces:
+        names:
+        - llmoptimizer
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+      action: replace
+      target_label: __scheme__
+      regex: (https?)
+    - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+    - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+      action: replace
+      target_label: __address__
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+    - action: labelmap
+      regex: __meta_kubernetes_service_label_(.+)
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: kubernetes_namespace
+    - source_labels: [__meta_kubernetes_service_name]
+      target_label: kubernetes_name
+
+  # PostgreSQL via PgBouncer
+  - job_name: 'pgbouncer'
+    static_configs:
+    - targets:
+      - pgbouncer-service:9127
+    relabel_configs:
+    - source_labels: [__address__]
+      target_label: instance
+      replacement: pgbouncer
+
+  # Redis metrics
+  - job_name: 'redis'
+    static_configs:
+    - targets:
+      - redis-master:9121
+      - redis-replica-1:9121
+      - redis-replica-2:9121
+    relabel_configs:
+    - source_labels: [__address__]
+      regex: '(.+):9121'
+      target_label: instance
+      replacement: '$1'
+
+  # MongoDB metrics
+  - job_name: 'mongodb'
+    static_configs:
+    - targets:
+      - mongodb-primary:9216
+      - mongodb-secondary-1:9216
+      - mongodb-secondary-2:9216
+
+  # Application metrics
+  - job_name: 'api-gateway'
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - llmoptimizer
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: api-gateway
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+      action: keep
+      regex: "8000"
+
+  # ML Service metrics
+  - job_name: 'ml-service'
+    kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names:
+        - llmoptimizer
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: ml-service
+    - source_labels: [__meta_kubernetes_pod_container_port_number]
+      action: keep
+      regex: "8004"
+
+  # GPU metrics (if using GPUs)
+  - job_name: 'nvidia-gpu'
+    kubernetes_sd_configs:
+    - role: pod
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: true
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: nvidia-dcgm-exporter
+
+  # Blackbox exporter for endpoint monitoring
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+    - targets:
+      - https://api.llmoptimizer.com
+      - https://dashboard.llmoptimizer.com
+    relabel_configs:
+    - source_labels: [__address__]
+      target_label: __param_target
+    - source_labels: [__param_target]
+      target_label: instance
+    - target_label: __address__
+      replacement: blackbox-exporter:9115
+
+# Storage configuration
+storage:
+  tsdb:
+    path: /prometheus
+    retention:
+      time: 15d
+      size: 100GB
+    wal_compression: true

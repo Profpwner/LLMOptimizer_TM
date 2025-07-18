@@ -1,0 +1,275 @@
+# Jaeger Instance for Production
+---
+apiVersion: jaegertracing.io/v1
+kind: Jaeger
+metadata:
+  name: jaeger-production
+  namespace: monitoring
+spec:
+  strategy: production
+  
+  collector:
+    replicas: 3
+    maxReplicas: 5
+    image: jaegertracing/jaeger-collector:1.52.0
+    options:
+      collector:
+        queue-size-memory: 1000
+        num-workers: 100
+      log-level: info
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1
+        memory: 2Gi
+    autoscale: true
+    serviceType: ClusterIP
+    
+  storage:
+    type: elasticsearch
+    options:
+      es:
+        server-urls: http://elasticsearch:9200
+        index-prefix: jaeger
+        version: 7
+        num-shards: 5
+        num-replicas: 1
+        create-index-templates: true
+        tags-as-fields:
+          all: true
+        bulk:
+          workers: 4
+          size: 1000
+          actions: 1000
+          flush-interval: 200ms
+    secretName: jaeger-elasticsearch-secret
+    
+    # Elasticsearch rollover configuration
+    esRollover:
+      schedule: "55 23 * * *"  # Daily at 23:55
+      conditions: |
+        {
+          "max_age": "7d",
+          "max_docs": 50000000,
+          "max_size": "5gb"
+        }
+      readTTL: 168h  # 7 days
+  
+  query:
+    replicas: 2
+    image: jaegertracing/jaeger-query:1.52.0
+    options:
+      query:
+        base-path: /jaeger
+        max-clock-skew-adjustment: 30s
+      log-level: info
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    serviceType: ClusterIP
+    
+  agent:
+    strategy: DaemonSet
+    image: jaegertracing/jaeger-agent:1.52.0
+    options:
+      reporter:
+        grpc:
+          host-port: jaeger-production-collector-headless:14250
+      log-level: info
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+  
+  ingester:
+    enabled: false  # Not needed for direct storage
+  
+  sampling:
+    options:
+      default_strategy:
+        type: adaptive
+        max_traces_per_second: 100
+---
+# Elasticsearch credentials
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jaeger-elasticsearch-secret
+  namespace: monitoring
+type: Opaque
+data:
+  ES_PASSWORD: Y2hhbmdlbWU=  # base64 encoded password
+  ES_USERNAME: ZWxhc3RpYw==  # base64 encoded username
+---
+# Sampling configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jaeger-sampling-config
+  namespace: monitoring
+data:
+  sampling_strategies.json: |
+    {
+      "default_strategy": {
+        "type": "adaptive",
+        "max_traces_per_second": 100,
+        "sampling_store": {
+          "type": "adaptive",
+          "adaptive": {
+            "max_sampling_probability": 0.001,
+            "target_samples_per_second": 1.0,
+            "initial_sampling_probability": 0.001
+          }
+        }
+      },
+      "service_strategies": [
+        {
+          "service": "api-gateway",
+          "type": "adaptive",
+          "max_traces_per_second": 50
+        },
+        {
+          "service": "ml-service",
+          "type": "probabilistic",
+          "param": 0.1
+        },
+        {
+          "service": "content-service",
+          "type": "adaptive",
+          "max_traces_per_second": 30
+        },
+        {
+          "service": "auth-service",
+          "type": "probabilistic",
+          "param": 0.05
+        }
+      ],
+      "per_operation_strategies": [
+        {
+          "operation": "POST /api/v1/ml/predict",
+          "type": "probabilistic",
+          "param": 0.5
+        },
+        {
+          "operation": "GET /api/v1/health",
+          "type": "probabilistic",
+          "param": 0.001
+        }
+      ]
+    }
+---
+# Service for Jaeger Query UI
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-query
+  namespace: monitoring
+  labels:
+    app: jaeger
+    component: query
+spec:
+  type: ClusterIP
+  ports:
+  - name: query
+    port: 16686
+    targetPort: 16686
+  - name: grpc-query
+    port: 16685
+    targetPort: 16685
+  selector:
+    app.kubernetes.io/instance: jaeger-production
+    app.kubernetes.io/component: query
+---
+# Service for Jaeger Collector
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-collector
+  namespace: monitoring
+  labels:
+    app: jaeger
+    component: collector
+spec:
+  type: ClusterIP
+  ports:
+  - name: grpc
+    port: 14250
+    targetPort: 14250
+  - name: http
+    port: 14268
+    targetPort: 14268
+  - name: zipkin
+    port: 9411
+    targetPort: 9411
+  selector:
+    app.kubernetes.io/instance: jaeger-production
+    app.kubernetes.io/component: collector
+---
+# HorizontalPodAutoscaler for Collector
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: jaeger-collector-hpa
+  namespace: monitoring
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: jaeger-production-collector
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+---
+# ServiceMonitor for Prometheus integration
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jaeger-metrics
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: jaeger
+  endpoints:
+  - port: admin-http
+    interval: 30s
+    path: /metrics

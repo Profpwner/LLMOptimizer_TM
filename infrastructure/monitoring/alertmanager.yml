@@ -1,0 +1,199 @@
+# Alertmanager configuration for LLMOptimizer
+# Integrates with PagerDuty, Slack, and email
+
+global:
+  resolve_timeout: 5m
+  
+  # SMTP configuration for email alerts
+  smtp_smarthost: 'smtp.gmail.com:587'
+  smtp_from: 'alerts@llmoptimizer.com'
+  smtp_auth_username: 'alerts@llmoptimizer.com'
+  smtp_auth_password: '$SMTP_PASSWORD'
+  smtp_auth_identity: 'alerts@llmoptimizer.com'
+  smtp_require_tls: true
+
+  # Slack configuration
+  slack_api_url: '$SLACK_WEBHOOK_URL'
+
+  # PagerDuty configuration
+  pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# The root route on which each incoming alert enters
+route:
+  # Group alerts by these labels
+  group_by: ['alertname', 'cluster', 'service', 'severity']
+  
+  # Wait before sending a notification for a group
+  group_wait: 10s
+  
+  # Wait before sending a notification about new alerts in a group
+  group_interval: 10s
+  
+  # Wait before resending a notification
+  repeat_interval: 12h
+  
+  # Default receiver
+  receiver: 'default'
+  
+  # Child routes
+  routes:
+    # Critical alerts go to PagerDuty
+    - match:
+        severity: critical
+      receiver: pagerduty-critical
+      continue: true
+      routes:
+        # Database critical alerts
+        - match:
+            team: database
+          receiver: database-oncall
+        # Security critical alerts
+        - match:
+            team: security
+          receiver: security-oncall
+    
+    # Warning alerts go to Slack
+    - match:
+        severity: warning
+      receiver: slack-warnings
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+    
+    # Info alerts go to email
+    - match:
+        severity: info
+      receiver: email-info
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 24h
+    
+    # Team-specific routing
+    - match:
+        team: ml
+      receiver: ml-team
+    
+    - match:
+        team: platform
+      receiver: platform-team
+    
+    - match:
+        team: infrastructure
+      receiver: infrastructure-team
+
+# Inhibition rules to suppress alerts
+inhibit_rules:
+  # Inhibit warning alerts if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
+  
+  # Inhibit info alerts if warning or critical alert is firing
+  - source_match_re:
+      severity: 'critical|warning'
+    target_match:
+      severity: 'info'
+    equal: ['alertname', 'cluster', 'service']
+  
+  # Inhibit pod-specific alerts if node is down
+  - source_match:
+      alertname: 'NodeDown'
+    target_match_re:
+      alertname: 'Pod.*'
+    equal: ['node']
+
+# Receivers configuration
+receivers:
+  # Default receiver (null - no notifications)
+  - name: 'default'
+  
+  # PagerDuty for critical alerts
+  - name: 'pagerduty-critical'
+    pagerduty_configs:
+      - routing_key: '$PAGERDUTY_ROUTING_KEY'
+        description: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        details:
+          firing: '{{ range .Alerts.Firing }}{{ .Labels.alertname }} on {{ .Labels.instance }}{{ end }}'
+          resolved: '{{ range .Alerts.Resolved }}{{ .Labels.alertname }} on {{ .Labels.instance }}{{ end }}'
+          num_firing: '{{ .Alerts.Firing | len }}'
+          num_resolved: '{{ .Alerts.Resolved | len }}'
+        severity: 'critical'
+        client: 'LLMOptimizer Alertmanager'
+        client_url: 'https://monitoring.llmoptimizer.com'
+  
+  # Database on-call
+  - name: 'database-oncall'
+    pagerduty_configs:
+      - routing_key: '$PAGERDUTY_DATABASE_KEY'
+        description: 'Database: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  
+  # Security on-call
+  - name: 'security-oncall'
+    pagerduty_configs:
+      - routing_key: '$PAGERDUTY_SECURITY_KEY'
+        description: 'Security: {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+  
+  # Slack for warnings
+  - name: 'slack-warnings'
+    slack_configs:
+      - channel: '#alerts-warning'
+        title: 'Warning Alert'
+        text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+        color: 'warning'
+        send_resolved: true
+        actions:
+          - type: button
+            text: 'Runbook'
+            url: '{{ (index .Alerts 0).Annotations.runbook_url }}'
+          - type: button
+            text: 'Dashboard'
+            url: 'https://grafana.llmoptimizer.com/d/{{ (index .Alerts 0).Labels.dashboard }}'
+  
+  # Email for info alerts
+  - name: 'email-info'
+    email_configs:
+      - to: 'ops-team@llmoptimizer.com'
+        headers:
+          Subject: 'Info Alert: {{ .GroupLabels.alertname }}'
+        html: |
+          <h2>{{ .GroupLabels.alertname }}</h2>
+          <p><b>Summary:</b> {{ range .Alerts }}{{ .Annotations.summary }}{{ end }}</p>
+          <p><b>Description:</b> {{ range .Alerts }}{{ .Annotations.description }}{{ end }}</p>
+          <p><b>Severity:</b> {{ .GroupLabels.severity }}</p>
+          <p><b>Service:</b> {{ .GroupLabels.service }}</p>
+          <p><a href="https://monitoring.llmoptimizer.com">View in Monitoring</a></p>
+  
+  # ML Team
+  - name: 'ml-team'
+    slack_configs:
+      - channel: '#ml-alerts'
+        title: 'ML Team Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    email_configs:
+      - to: 'ml-team@llmoptimizer.com'
+  
+  # Platform Team
+  - name: 'platform-team'
+    slack_configs:
+      - channel: '#platform-alerts'
+        title: 'Platform Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    webhook_configs:
+      - url: 'https://api.llmoptimizer.com/webhooks/alerts'
+        send_resolved: true
+  
+  # Infrastructure Team
+  - name: 'infrastructure-team'
+    slack_configs:
+      - channel: '#infra-alerts'
+        title: 'Infrastructure Alert: {{ .GroupLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    pagerduty_configs:
+      - routing_key: '$PAGERDUTY_INFRA_KEY'
+        severity: 'warning'

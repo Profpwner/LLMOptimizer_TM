@@ -1,0 +1,177 @@
+# Recording Rules for performance optimization
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: istio-metrics-aggregation
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: istio_metrics_aggregation
+    interval: 30s
+    rules:
+    # Request rate
+    - record: service:request_rate
+      expr: |
+        sum by (destination_service_name, destination_service_namespace) (
+          rate(istio_request_total[5m])
+        )
+    
+    # Success rate
+    - record: service:success_rate
+      expr: |
+        sum by (destination_service_name, destination_service_namespace) (
+          rate(istio_request_total{response_code!~"5.."}[5m])
+        ) /
+        sum by (destination_service_name, destination_service_namespace) (
+          rate(istio_request_total[5m])
+        )
+    
+    # P50 latency
+    - record: service:p50_latency
+      expr: |
+        histogram_quantile(0.50,
+          sum by (destination_service_name, destination_service_namespace, le) (
+            rate(istio_request_duration_milliseconds_bucket[5m])
+          )
+        )
+    
+    # P95 latency
+    - record: service:p95_latency
+      expr: |
+        histogram_quantile(0.95,
+          sum by (destination_service_name, destination_service_namespace, le) (
+            rate(istio_request_duration_milliseconds_bucket[5m])
+          )
+        )
+    
+    # P99 latency
+    - record: service:p99_latency
+      expr: |
+        histogram_quantile(0.99,
+          sum by (destination_service_name, destination_service_namespace, le) (
+            rate(istio_request_duration_milliseconds_bucket[5m])
+          )
+        )
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llmoptimizer-business-metrics
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: business_metrics
+    interval: 60s
+    rules:
+    # Content processing rate
+    - record: llmoptimizer:content_processing_rate
+      expr: |
+        sum(rate(content_service_documents_processed_total[5m])) by (status)
+    
+    # ML predictions per second
+    - record: llmoptimizer:ml_predictions_rate
+      expr: |
+        sum(rate(ml_service_predictions_total[5m])) by (model_name, model_version)
+    
+    # API usage by tier
+    - record: llmoptimizer:api_usage_by_tier
+      expr: |
+        sum by (user_tier) (
+          rate(api_gateway_requests_total[5m])
+        )
+    
+    # Authentication success rate
+    - record: llmoptimizer:auth_success_rate
+      expr: |
+        sum(rate(auth_service_login_attempts_total{status="success"}[5m])) /
+        sum(rate(auth_service_login_attempts_total[5m]))
+    
+    # Average content quality score
+    - record: llmoptimizer:avg_content_quality_score
+      expr: |
+        avg(content_service_quality_score) by (content_type)
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: resource-utilization
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: resource_utilization
+    interval: 30s
+    rules:
+    # Namespace CPU usage
+    - record: namespace:cpu_usage_cores
+      expr: |
+        sum by (namespace) (
+          rate(container_cpu_usage_seconds_total{container!="", pod!=""}[5m])
+        )
+    
+    # Namespace memory usage
+    - record: namespace:memory_usage_bytes
+      expr: |
+        sum by (namespace) (
+          container_memory_working_set_bytes{container!="", pod!=""}
+        )
+    
+    # Pod CPU utilization percentage
+    - record: pod:cpu_utilization_percentage
+      expr: |
+        100 * sum by (namespace, pod) (
+          rate(container_cpu_usage_seconds_total{container!="", pod!=""}[5m])
+        ) / sum by (namespace, pod) (
+          kube_pod_container_resource_requests{resource="cpu"}
+        )
+    
+    # Pod memory utilization percentage
+    - record: pod:memory_utilization_percentage
+      expr: |
+        100 * sum by (namespace, pod) (
+          container_memory_working_set_bytes{container!="", pod!=""}
+        ) / sum by (namespace, pod) (
+          kube_pod_container_resource_requests{resource="memory"}
+        )
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: slo-recording-rules
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: slo_rules
+    interval: 30s
+    rules:
+    # 5-minute error rate
+    - record: slo:error_rate_5m
+      expr: |
+        sum by (service) (
+          rate(istio_request_total{response_code=~"5.."}[5m])
+        ) / sum by (service) (
+          rate(istio_request_total[5m])
+        )
+    
+    # 30-day error budget burn rate
+    - record: slo:error_budget_burn_rate
+      expr: |
+        (
+          1 - (
+            sum_over_time(slo:error_rate_5m[30d]) / 
+            count_over_time(slo:error_rate_5m[30d])
+          )
+        ) / 0.001  # 99.9% SLO
+    
+    # Availability SLI
+    - record: slo:availability
+      expr: |
+        1 - avg_over_time(slo:error_rate_5m[5m])

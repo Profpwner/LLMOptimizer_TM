@@ -1,0 +1,436 @@
+# Scaling Policies for LLMOptimizer
+# Defines scaling behaviors and strategies for different scenarios
+
+---
+# Priority Classes for pod scheduling
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: llmoptimizer-critical
+value: 1000
+globalDefault: false
+description: "Critical LLMOptimizer services (auth, api-gateway)"
+
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: llmoptimizer-high
+value: 900
+globalDefault: false
+description: "High priority LLMOptimizer services (ml-service, content-service)"
+
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: llmoptimizer-medium
+value: 800
+globalDefault: false
+description: "Medium priority LLMOptimizer services (analytics, integrations)"
+
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: llmoptimizer-low
+value: 700
+globalDefault: false
+description: "Low priority LLMOptimizer services (batch jobs, background tasks)"
+
+---
+# Network Policy for inter-service communication during scaling
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-scaling-communication
+  namespace: llmoptimizer
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: llmoptimizer
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: llmoptimizer
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+
+---
+# Resource Quotas for namespace
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: llmoptimizer-quota
+  namespace: llmoptimizer
+spec:
+  hard:
+    requests.cpu: "1000"
+    requests.memory: "4Ti"
+    limits.cpu: "2000"
+    limits.memory: "8Ti"
+    persistentvolumeclaims: "100"
+    services: "50"
+    services.loadbalancers: "10"
+    services.nodeports: "20"
+    pods: "5000"
+
+---
+# Limit Ranges for pod resources
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: llmoptimizer-limits
+  namespace: llmoptimizer
+spec:
+  limits:
+  - max:
+      cpu: "16"
+      memory: "64Gi"
+      nvidia.com/gpu: "4"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    default:
+      cpu: "500m"
+      memory: "1Gi"
+    defaultRequest:
+      cpu: "200m"
+      memory: "512Mi"
+    type: Container
+  - max:
+      storage: "1Ti"
+    min:
+      storage: "1Gi"
+    type: PersistentVolumeClaim
+
+---
+# ConfigMap for scaling strategies
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-strategies
+  namespace: llmoptimizer
+data:
+  strategies.yaml: |
+    # Scaling strategies for different scenarios
+    
+    # Normal hours (business hours)
+    normal_hours:
+      scale_up_rate: 50%
+      scale_down_rate: 10%
+      target_utilization: 70%
+      buffer_capacity: 20%
+    
+    # Peak hours (high traffic)
+    peak_hours:
+      scale_up_rate: 100%
+      scale_down_rate: 5%
+      target_utilization: 60%
+      buffer_capacity: 40%
+      preemptive_scaling: true
+      preemptive_threshold: 80%
+    
+    # Off-peak hours (low traffic)
+    off_peak_hours:
+      scale_up_rate: 30%
+      scale_down_rate: 20%
+      target_utilization: 80%
+      buffer_capacity: 10%
+    
+    # Black Friday / Special events
+    special_events:
+      scale_up_rate: 200%
+      scale_down_rate: 2%
+      target_utilization: 50%
+      buffer_capacity: 100%
+      preemptive_scaling: true
+      preemptive_threshold: 60%
+      min_replicas_multiplier: 3
+    
+    # Disaster recovery
+    disaster_recovery:
+      scale_up_rate: 500%
+      scale_down_rate: 0%
+      target_utilization: 40%
+      buffer_capacity: 200%
+      cross_region_scaling: true
+      priority_shedding: true
+
+---
+# CronJob for scheduled scaling adjustments
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scaling-adjuster
+  namespace: llmoptimizer
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: scaling-adjuster
+          containers:
+          - name: adjuster
+            image: llmoptimizer/scaling-adjuster:latest
+            env:
+            - name: NAMESPACE
+              value: llmoptimizer
+            - name: STRATEGY_CONFIG
+              value: /etc/scaling/strategies.yaml
+            volumeMounts:
+            - name: strategies
+              mountPath: /etc/scaling
+            command:
+            - python
+            - -c
+            - |
+              import os
+              import yaml
+              import datetime
+              from kubernetes import client, config
+              
+              config.load_incluster_config()
+              v1 = client.AutoscalingV2Api()
+              
+              # Load strategies
+              with open('/etc/scaling/strategies.yaml', 'r') as f:
+                  strategies = yaml.safe_load(f)
+              
+              # Determine current time period
+              now = datetime.datetime.now()
+              hour = now.hour
+              
+              if 9 <= hour <= 17:  # Business hours
+                  strategy = 'normal_hours'
+              elif 18 <= hour <= 22:  # Peak evening hours
+                  strategy = 'peak_hours'
+              else:  # Off-peak
+                  strategy = 'off_peak_hours'
+              
+              # Check for special events
+              # This would connect to a calendar API or database
+              # For now, we'll use environment variable
+              if os.getenv('SPECIAL_EVENT_MODE') == 'true':
+                  strategy = 'special_events'
+              
+              print(f"Applying scaling strategy: {strategy}")
+              
+              # Update HPA behaviors based on strategy
+              # This is a simplified example - actual implementation would be more complex
+              namespace = os.getenv('NAMESPACE', 'llmoptimizer')
+              hpas = v1.list_namespaced_horizontal_pod_autoscaler(namespace)
+              
+              for hpa in hpas.items:
+                  # Update HPA based on strategy
+                  print(f"Updating HPA: {hpa.metadata.name}")
+                  # Actual update logic would go here
+          volumes:
+          - name: strategies
+            configMap:
+              name: scaling-strategies
+          restartPolicy: OnFailure
+
+---
+# ServiceAccount for scaling adjuster
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scaling-adjuster
+  namespace: llmoptimizer
+
+---
+# Role for scaling adjuster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scaling-adjuster
+  namespace: llmoptimizer
+rules:
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "statefulsets"]
+  verbs: ["get", "list"]
+
+---
+# RoleBinding for scaling adjuster
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scaling-adjuster
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: scaling-adjuster
+subjects:
+- kind: ServiceAccount
+  name: scaling-adjuster
+  namespace: llmoptimizer
+
+---
+# Scaling Event Rules
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-event-rules
+  namespace: llmoptimizer
+data:
+  rules.yaml: |
+    # Event-based scaling rules
+    events:
+      # Marketing campaign launch
+      - name: marketing_campaign
+        trigger:
+          type: api_call
+          endpoint: /api/v1/campaigns/launch
+        scaling:
+          services:
+            - name: api-gateway
+              min_replicas_multiplier: 2
+              max_replicas_multiplier: 3
+            - name: content-service
+              min_replicas_multiplier: 2.5
+              max_replicas_multiplier: 4
+            - name: ml-service
+              min_replicas_multiplier: 2
+              max_replicas_multiplier: 3
+          duration: 4h
+          ramp_up_time: 30m
+          ramp_down_time: 2h
+      
+      # LLM platform update
+      - name: llm_platform_update
+        trigger:
+          type: webhook
+          source: llm-monitoring
+        scaling:
+          services:
+            - name: llm-monitoring
+              min_replicas_multiplier: 3
+              max_replicas_multiplier: 5
+            - name: ml-service
+              min_replicas_multiplier: 1.5
+              max_replicas_multiplier: 2
+          duration: 2h
+          ramp_up_time: 15m
+          ramp_down_time: 1h
+      
+      # Viral content detection
+      - name: viral_content
+        trigger:
+          type: metric
+          metric: content_views_rate
+          threshold: 10000
+          window: 5m
+        scaling:
+          services:
+            - name: content-service
+              min_replicas_multiplier: 5
+              max_replicas_multiplier: 10
+            - name: api-gateway
+              min_replicas_multiplier: 3
+              max_replicas_multiplier: 5
+            - name: analytics-service
+              min_replicas_multiplier: 2
+              max_replicas_multiplier: 3
+          duration: 6h
+          ramp_up_time: 5m
+          ramp_down_time: 3h
+      
+      # Database maintenance window
+      - name: database_maintenance
+        trigger:
+          type: schedule
+          cron: "0 2 * * SUN"  # Sunday 2 AM
+        scaling:
+          services:
+            - name: api-gateway
+              traffic_shift: 50%  # Shift traffic to read replicas
+            - name: content-service
+              cache_only_mode: true
+          duration: 2h
+          pre_scale_buffer: 30m
+
+---
+# Predictive Scaling Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: predictive-scaling-config
+  namespace: llmoptimizer
+data:
+  config.yaml: |
+    # Predictive scaling configuration
+    predictive_scaling:
+      enabled: true
+      
+      # Time series analysis
+      time_series:
+        history_days: 30
+        prediction_window: 4h
+        update_interval: 15m
+        algorithms:
+          - prophet
+          - arima
+          - lstm
+      
+      # ML models for prediction
+      models:
+        traffic_prediction:
+          type: ensemble
+          components:
+            - type: prophet
+              weight: 0.4
+            - type: lstm
+              weight: 0.4
+            - type: arima
+              weight: 0.2
+          features:
+            - hour_of_day
+            - day_of_week
+            - is_holiday
+            - marketing_campaigns
+            - historical_traffic
+          
+        resource_prediction:
+          type: gradient_boosting
+          features:
+            - current_cpu
+            - current_memory
+            - request_rate
+            - response_time_p95
+            - queue_depth
+          
+      # Scaling decisions
+      scaling_decision:
+        confidence_threshold: 0.8
+        safety_margin: 1.2
+        min_prediction_accuracy: 0.85
+        
+      # Integration with HPA
+      hpa_integration:
+        update_hpa_targets: true
+        max_target_adjustment: 2.0
+        min_target_adjustment: 0.5

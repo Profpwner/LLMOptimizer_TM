@@ -1,0 +1,446 @@
+# Kibana Deployment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-config
+  namespace: monitoring
+data:
+  kibana.yml: |
+    server.name: kibana
+    server.host: "0.0.0.0"
+    server.basePath: ""
+    server.rewriteBasePath: false
+    
+    # Elasticsearch connection
+    elasticsearch.hosts: ["https://elasticsearch:9200"]
+    elasticsearch.username: "kibana_system"
+    elasticsearch.password: "${KIBANA_PASSWORD}"
+    elasticsearch.ssl.verificationMode: certificate
+    elasticsearch.ssl.certificateAuthorities: ["/usr/share/kibana/certs/ca.crt"]
+    
+    # Security settings
+    xpack.security.enabled: true
+    xpack.security.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+    xpack.security.sessionTimeout: 1800000  # 30 minutes
+    xpack.security.session.idleTimeout: 300000  # 5 minutes
+    xpack.security.session.lifespan: 86400000  # 24 hours
+    
+    # Monitoring
+    monitoring.ui.enabled: true
+    monitoring.ui.container.elasticsearch.enabled: true
+    monitoring.ui.container.logstash.enabled: true
+    
+    # Reporting
+    xpack.reporting.enabled: true
+    xpack.reporting.encryptionKey: "${KIBANA_REPORTING_KEY}"
+    xpack.reporting.kibanaServer.hostname: "0.0.0.0"
+    xpack.reporting.queue.timeout: 120000
+    xpack.reporting.csv.maxSizeBytes: 10485760
+    xpack.reporting.csv.scroll.duration: 30s
+    
+    # APM
+    xpack.apm.enabled: true
+    xpack.apm.ui.enabled: true
+    
+    # Alerting
+    xpack.alerting.enabled: true
+    xpack.actions.enabled: true
+    
+    # Machine Learning
+    xpack.ml.enabled: false
+    
+    # Map settings
+    map.includeElasticMapsService: true
+    
+    # Saved objects
+    savedObjects.maxImportExportSize: 10000
+    
+    # Telemetry
+    telemetry.enabled: false
+    telemetry.optIn: false
+    
+    # Custom branding
+    server.customResponseHeaders:
+      X-Content-Type-Options: nosniff
+      X-Frame-Options: DENY
+      X-XSS-Protection: 1; mode=block
+      Strict-Transport-Security: max-age=31536000; includeSubDomains
+    
+    # Logging
+    logging:
+      appenders:
+        console:
+          type: console
+          layout:
+            type: pattern
+            pattern: "[%date] [%level] [%logger] %message"
+      root:
+        level: info
+        appenders: [console]
+      loggers:
+        - name: elasticsearch.query
+          level: debug
+        - name: plugins
+          level: info
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kibana-secrets
+  namespace: monitoring
+type: Opaque
+stringData:
+  KIBANA_PASSWORD: "changeme-kibana-password"
+  KIBANA_ENCRYPTION_KEY: "changeme-32-character-encryption-key"
+  KIBANA_REPORTING_KEY: "changeme-32-character-reporting-key"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: monitoring
+  labels:
+    app: kibana
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+      - name: kibana
+        image: docker.elastic.co/kibana/kibana:8.11.3
+        ports:
+        - containerPort: 5601
+          name: http
+        env:
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=2048"
+        envFrom:
+        - secretRef:
+            name: kibana-secrets
+        volumeMounts:
+        - name: config
+          mountPath: /usr/share/kibana/config/kibana.yml
+          subPath: kibana.yml
+        - name: certs
+          mountPath: /usr/share/kibana/certs
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /api/status
+            port: http
+          initialDelaySeconds: 120
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/status
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: kibana-config
+      - name: certs
+        secret:
+          secretName: kibana-certs
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - kibana
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: monitoring
+  labels:
+    app: kibana
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5601
+    targetPort: http
+    name: http
+  selector:
+    app: kibana
+---
+# ConfigMap for Kibana saved objects (dashboards, visualizations, etc.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kibana-saved-objects
+  namespace: monitoring
+data:
+  import-saved-objects.sh: |
+    #!/bin/bash
+    set -e
+    
+    # Wait for Kibana to be ready
+    until curl -s -u elastic:${ELASTIC_PASSWORD} http://kibana:5601/api/status | grep -q '"state":"green"'; do
+      echo "Waiting for Kibana to be ready..."
+      sleep 10
+    done
+    
+    # Create index patterns
+    curl -X POST -u elastic:${ELASTIC_PASSWORD} \
+      "http://kibana:5601/api/saved_objects/index-pattern" \
+      -H "kbn-xsrf: true" \
+      -H "Content-Type: application/json" -d '{
+      "attributes": {
+        "title": "logs-*",
+        "timeFieldName": "@timestamp",
+        "fields": "[]"
+      }
+    }'
+    
+    curl -X POST -u elastic:${ELASTIC_PASSWORD} \
+      "http://kibana:5601/api/saved_objects/index-pattern" \
+      -H "kbn-xsrf: true" \
+      -H "Content-Type: application/json" -d '{
+      "attributes": {
+        "title": "istio-access-*",
+        "timeFieldName": "@timestamp",
+        "fields": "[]"
+      }
+    }'
+    
+    curl -X POST -u elastic:${ELASTIC_PASSWORD} \
+      "http://kibana:5601/api/saved_objects/index-pattern" \
+      -H "kbn-xsrf: true" \
+      -H "Content-Type: application/json" -d '{
+      "attributes": {
+        "title": "app-*",
+        "timeFieldName": "@timestamp",
+        "fields": "[]"
+      }
+    }'
+    
+    # Create dashboards
+    curl -X POST -u elastic:${ELASTIC_PASSWORD} \
+      "http://kibana:5601/api/saved_objects/dashboard" \
+      -H "kbn-xsrf: true" \
+      -H "Content-Type: application/json" -d '{
+      "attributes": {
+        "title": "LLMOptimizer Overview",
+        "hits": 0,
+        "description": "Main dashboard for LLMOptimizer application monitoring",
+        "panelsJSON": "[{\"version\":\"8.11.3\",\"gridData\":{\"x\":0,\"y\":0,\"w\":24,\"h\":15},\"panelIndex\":\"1\",\"embeddableConfig\":{},\"panelRefName\":\"panel_1\"}]",
+        "version": 1,
+        "timeRestore": true,
+        "timeTo": "now",
+        "timeFrom": "now-1h",
+        "refreshInterval": {
+          "pause": false,
+          "value": 10000
+        },
+        "kibanaSavedObjectMeta": {
+          "searchSourceJSON": "{\"query\":{\"query\":\"\",\"language\":\"kuery\"},\"filter\":[]}"
+        }
+      }
+    }'
+    
+    echo "Kibana saved objects imported successfully"
+---
+# Filebeat DaemonSet for log collection
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-config
+  namespace: monitoring
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+    - type: container
+      paths:
+        - /var/log/containers/*.log
+      processors:
+        - add_kubernetes_metadata:
+            host: ${NODE_NAME}
+            matchers:
+            - logs_path:
+                logs_path: "/var/log/containers/"
+        - drop_event:
+            when:
+              or:
+              - equals:
+                  kubernetes.namespace: "kube-system"
+              - equals:
+                  kubernetes.namespace: "kube-public"
+        - decode_json_fields:
+            fields: ["message"]
+            target: ""
+            overwrite_keys: true
+            when:
+              regexp:
+                message: '^\{.*\}$'
+    
+    - type: syslog
+      protocol.udp:
+        host: "0.0.0.0:5140"
+    
+    output.logstash:
+      hosts: ["logstash:5044"]
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca.crt"]
+      ssl.certificate: "/usr/share/filebeat/certs/filebeat.crt"
+      ssl.key: "/usr/share/filebeat/certs/filebeat.key"
+      bulk_max_size: 2048
+      worker: 2
+    
+    processors:
+      - add_host_metadata:
+          when.not.contains.tags: forwarded
+      - add_docker_metadata: ~
+      - add_kubernetes_metadata: ~
+    
+    monitoring.enabled: true
+    monitoring.elasticsearch:
+      hosts: ["https://elasticsearch:9200"]
+      username: beats_system
+      password: ${BEATS_PASSWORD}
+      ssl.enabled: true
+      ssl.certificate_authorities: ["/usr/share/filebeat/certs/ca.crt"]
+    
+    logging.level: info
+    logging.to_files: true
+    logging.files:
+      path: /var/log/filebeat
+      name: filebeat
+      keepfiles: 7
+      permissions: 0644
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: filebeat
+  namespace: monitoring
+  labels:
+    app: filebeat
+spec:
+  selector:
+    matchLabels:
+      app: filebeat
+  template:
+    metadata:
+      labels:
+        app: filebeat
+    spec:
+      serviceAccountName: filebeat
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: filebeat
+        image: docker.elastic.co/beats/filebeat:8.11.3
+        args: [
+          "-c", "/etc/filebeat.yml",
+          "-e",
+        ]
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: BEATS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: elasticsearch-credentials
+              key: beats-password
+        securityContext:
+          runAsUser: 0
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 200m
+            memory: 400Mi
+        volumeMounts:
+        - name: config
+          mountPath: /etc/filebeat.yml
+          readOnly: true
+          subPath: filebeat.yml
+        - name: data
+          mountPath: /usr/share/filebeat/data
+        - name: certs
+          mountPath: /usr/share/filebeat/certs
+          readOnly: true
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+        - name: varlog
+          mountPath: /var/log
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          defaultMode: 0640
+          name: filebeat-config
+      - name: varlibdockercontainers
+        hostPath:
+          path: /var/lib/docker/containers
+      - name: varlog
+        hostPath:
+          path: /var/log
+      - name: data
+        hostPath:
+          path: /var/lib/filebeat-data
+          type: DirectoryOrCreate
+      - name: certs
+        secret:
+          secretName: filebeat-certs
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: filebeat
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: filebeat
+rules:
+- apiGroups: [""]
+  resources:
+  - namespaces
+  - pods
+  - nodes
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources:
+  - replicasets
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: filebeat
+subjects:
+- kind: ServiceAccount
+  name: filebeat
+  namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: filebeat
+  apiGroup: rbac.authorization.k8s.io

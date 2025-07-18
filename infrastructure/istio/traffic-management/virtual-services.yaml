@@ -1,0 +1,263 @@
+# API Gateway Virtual Service
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: api-gateway
+  namespace: llmoptimizer
+spec:
+  hosts:
+  - "api.llmoptimizer.com"
+  - "llmoptimizer.com"
+  gateways:
+  - llmoptimizer-gateway
+  http:
+  - match:
+    - uri:
+        prefix: "/api/v1"
+    headers:
+      request:
+        set:
+          x-forwarded-proto: https
+        add:
+          x-request-id: "%REQ(X-REQUEST-ID)%"
+          x-b3-traceid: "%REQ(X-B3-TRACEID)%"
+    route:
+    - destination:
+        host: api-gateway.llmoptimizer.svc.cluster.local
+        port:
+          number: 8080
+      weight: 100
+    timeout: 30s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+      retryOn: gateway-error,reset,connect-failure,refused-stream
+  - match:
+    - uri:
+        prefix: "/"
+    route:
+    - destination:
+        host: frontend.llmoptimizer.svc.cluster.local
+        port:
+          number: 3000
+---
+# Auth Service Virtual Service
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: auth-service
+  namespace: llmoptimizer
+spec:
+  hosts:
+  - auth-service.llmoptimizer.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: "/api/v1/auth"
+    route:
+    - destination:
+        host: auth-service.llmoptimizer.svc.cluster.local
+        port:
+          number: 8000
+      weight: 100
+    timeout: 15s
+    retries:
+      attempts: 2
+      perTryTimeout: 5s
+      retryOn: 5xx
+  - match:
+    - uri:
+        prefix: "/api/v1/oauth"
+    route:
+    - destination:
+        host: auth-service.llmoptimizer.svc.cluster.local
+        port:
+          number: 8000
+      weight: 100
+    timeout: 30s
+---
+# Content Service Virtual Service with Canary Deployment
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: content-service
+  namespace: llmoptimizer
+spec:
+  hosts:
+  - content-service.llmoptimizer.svc.cluster.local
+  http:
+  - match:
+    - headers:
+        x-version:
+          exact: canary
+    route:
+    - destination:
+        host: content-service.llmoptimizer.svc.cluster.local
+        subset: canary
+        port:
+          number: 8001
+      weight: 100
+  - route:
+    - destination:
+        host: content-service.llmoptimizer.svc.cluster.local
+        subset: stable
+        port:
+          number: 8001
+      weight: 95
+    - destination:
+        host: content-service.llmoptimizer.svc.cluster.local
+        subset: canary
+        port:
+          number: 8001
+      weight: 5
+    timeout: 60s
+    retries:
+      attempts: 3
+      perTryTimeout: 20s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+---
+# Analytics Service Virtual Service
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: analytics-service
+  namespace: llmoptimizer
+spec:
+  hosts:
+  - analytics-service.llmoptimizer.svc.cluster.local
+  http:
+  - match:
+    - uri:
+        prefix: "/api/v1/analytics"
+    route:
+    - destination:
+        host: analytics-service.llmoptimizer.svc.cluster.local
+        port:
+          number: 8002
+      weight: 100
+    timeout: 45s
+    retries:
+      attempts: 2
+      perTryTimeout: 15s
+      retryOn: 5xx,deadline-exceeded
+---
+# ML Service Virtual Service with A/B Testing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ml-service
+  namespace: llmoptimizer
+spec:
+  hosts:
+  - ml-service.llmoptimizer.svc.cluster.local
+  http:
+  - match:
+    - headers:
+        x-user-group:
+          exact: "test-group-a"
+    route:
+    - destination:
+        host: ml-service.llmoptimizer.svc.cluster.local
+        subset: version-a
+        port:
+          number: 8003
+      weight: 100
+  - match:
+    - headers:
+        x-user-group:
+          exact: "test-group-b"
+    route:
+    - destination:
+        host: ml-service.llmoptimizer.svc.cluster.local
+        subset: version-b
+        port:
+          number: 8003
+      weight: 100
+  - route:
+    - destination:
+        host: ml-service.llmoptimizer.svc.cluster.local
+        subset: version-a
+        port:
+          number: 8003
+      weight: 50
+    - destination:
+        host: ml-service.llmoptimizer.svc.cluster.local
+        subset: version-b
+        port:
+          number: 8003
+      weight: 50
+    timeout: 120s
+    retries:
+      attempts: 1
+      perTryTimeout: 60s
+      retryOn: 5xx,reset
+---
+# Monitoring Services Virtual Services
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  hosts:
+  - "grafana.llmoptimizer.com"
+  gateways:
+  - monitoring-gateway
+  http:
+  - route:
+    - destination:
+        host: grafana.monitoring.svc.cluster.local
+        port:
+          number: 3000
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  hosts:
+  - "prometheus.llmoptimizer.com"
+  gateways:
+  - monitoring-gateway
+  http:
+  - route:
+    - destination:
+        host: prometheus.monitoring.svc.cluster.local
+        port:
+          number: 9090
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: jaeger
+  namespace: monitoring
+spec:
+  hosts:
+  - "jaeger.llmoptimizer.com"
+  gateways:
+  - monitoring-gateway
+  http:
+  - route:
+    - destination:
+        host: jaeger-query.monitoring.svc.cluster.local
+        port:
+          number: 16686
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: kibana
+  namespace: monitoring
+spec:
+  hosts:
+  - "kibana.llmoptimizer.com"
+  gateways:
+  - monitoring-gateway
+  http:
+  - route:
+    - destination:
+        host: kibana.monitoring.svc.cluster.local
+        port:
+          number: 5601

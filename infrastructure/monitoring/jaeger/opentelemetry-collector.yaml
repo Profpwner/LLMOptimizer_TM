@@ -1,0 +1,302 @@
+# OpenTelemetry Collector for enhanced tracing
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: monitoring
+data:
+  otel-collector-config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_binary:
+            endpoint: 0.0.0.0:6832
+          thrift_compact:
+            endpoint: 0.0.0.0:6831
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+      
+      zipkin:
+        endpoint: 0.0.0.0:9411
+      
+      prometheus:
+        config:
+          scrape_configs:
+          - job_name: 'otel-collector'
+            scrape_interval: 10s
+            static_configs:
+            - targets: ['0.0.0.0:8888']
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+      
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 2048
+        spike_limit_mib: 512
+      
+      span:
+        name:
+          to_attributes:
+            rules:
+            - ^\/api\/v1\/(?P<service>[^\/]+)\/(?P<operation>.*)$
+          from_attributes: ["http.target"]
+      
+      attributes:
+        actions:
+        - key: environment
+          value: production
+          action: insert
+        - key: cluster
+          value: llmoptimizer-prod
+          action: insert
+        - key: http.user_agent
+          action: delete
+        - key: http.request.body
+          action: delete
+        - key: http.response.body
+          action: delete
+      
+      resource:
+        attributes:
+        - key: service.instance.id
+          from_attribute: k8s.pod.name
+          action: insert
+        - key: k8s.cluster.name
+          value: llmoptimizer-prod
+          action: insert
+      
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100000
+        expected_new_traces_per_sec: 10000
+        policies:
+        - name: errors-policy
+          type: status_code
+          status_code:
+            status_codes: [ERROR]
+        - name: slow-traces-policy
+          type: latency
+          latency:
+            threshold_ms: 1000
+        - name: probabilistic-policy
+          type: probabilistic
+          probabilistic:
+            sampling_percentage: 1
+        - name: ml-service-policy
+          type: and
+          and:
+            policies:
+            - name: service-name-policy
+              type: string_attribute
+              string_attribute:
+                key: service.name
+                values: [ml-service]
+            - name: probabilistic-policy
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 10
+    
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      pprof:
+        endpoint: 0.0.0.0:1777
+      zpages:
+        endpoint: 0.0.0.0:55679
+    
+    exporters:
+      jaeger:
+        endpoint: jaeger-collector.monitoring:14250
+        tls:
+          insecure: true
+      
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        namespace: otel
+        const_labels:
+          collector: 'otel-collector'
+        send_timestamps: true
+        metric_expiration: 300s
+      
+      logging:
+        loglevel: info
+        sampling_initial: 5
+        sampling_thereafter: 200
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp, jaeger, zipkin]
+          processors: [memory_limiter, batch, span, attributes, resource, tail_sampling]
+          exporters: [jaeger, logging]
+        
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, batch, attributes, resource]
+          exporters: [prometheus]
+      
+      extensions: [health_check, pprof, zpages]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opentelemetry-collector
+  namespace: monitoring
+  labels:
+    app: opentelemetry-collector
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: opentelemetry-collector
+  template:
+    metadata:
+      labels:
+        app: opentelemetry-collector
+    spec:
+      serviceAccountName: otel-collector
+      containers:
+      - name: otel-collector
+        image: otel/opentelemetry-collector-contrib:0.91.0
+        command:
+        - "/otelcol-contrib"
+        - "--config=/conf/otel-collector-config.yaml"
+        ports:
+        - containerPort: 4317  # OTLP gRPC
+          name: otlp-grpc
+        - containerPort: 4318  # OTLP HTTP
+          name: otlp-http
+        - containerPort: 14250 # Jaeger gRPC
+          name: jaeger-grpc
+        - containerPort: 14268 # Jaeger HTTP
+          name: jaeger-http
+        - containerPort: 9411  # Zipkin
+          name: zipkin
+        - containerPort: 8888  # Metrics
+          name: metrics
+        - containerPort: 8889  # Prometheus exporter
+          name: prom-exporter
+        - containerPort: 13133 # Health check
+          name: health-check
+        volumeMounts:
+        - name: config
+          mountPath: /conf
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /
+            port: health-check
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: health-check
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: otel-collector-config
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - opentelemetry-collector
+              topologyKey: kubernetes.io/hostname
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: monitoring
+  labels:
+    app: opentelemetry-collector
+spec:
+  type: ClusterIP
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: otlp-grpc
+  - name: otlp-http
+    port: 4318
+    targetPort: otlp-http
+  - name: jaeger-grpc
+    port: 14250
+    targetPort: jaeger-grpc
+  - name: jaeger-http
+    port: 14268
+    targetPort: jaeger-http
+  - name: zipkin
+    port: 9411
+    targetPort: zipkin
+  - name: metrics
+    port: 8888
+    targetPort: metrics
+  selector:
+    app: opentelemetry-collector
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: otel-collector
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["extensions"]
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector
+subjects:
+- kind: ServiceAccount
+  name: otel-collector
+  namespace: monitoring

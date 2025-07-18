@@ -1,0 +1,190 @@
+# Kubernetes Audit Policy for compliance and security monitoring
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# Don't generate audit events for all requests in RequestReceived stage.
+omitStages:
+  - "RequestReceived"
+rules:
+  # Log pod changes at RequestResponse level
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: ""
+      resources: ["pods", "pods/status"]
+    namespaces: ["llmoptimizer"]
+
+  # Log service account token creation
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: ""
+      resources: ["serviceaccounts/token"]
+
+  # Log secret operations
+  - level: Metadata
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: ""
+      resources: ["secrets"]
+    namespaces: ["llmoptimizer"]
+
+  # Log configmap changes in namespace
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: ""
+      resources: ["configmaps"]
+    namespaces: ["llmoptimizer"]
+
+  # Log RBAC changes at Metadata level
+  - level: Metadata
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: "rbac.authorization.k8s.io"
+      resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+
+  # Log authentication events
+  - level: Metadata
+    omitStages:
+      - "RequestReceived"
+    userGroups: ["system:unauthenticated"]
+
+  # Log changes to admission webhooks
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: "admissionregistration.k8s.io"
+      resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
+
+  # Detailed logging for exec and port-forward
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    resources:
+    - group: ""
+      resources: ["pods/exec", "pods/portforward", "pods/proxy"]
+    namespaces: ["llmoptimizer"]
+
+  # Log all operations by certain users (for compliance)
+  - level: RequestResponse
+    omitStages:
+      - "RequestReceived"
+    users: ["admin@llmoptimizer.com", "audit@llmoptimizer.com"]
+
+  # Exclude logs from system components
+  - level: None
+    users: ["system:kube-scheduler", "system:kube-proxy", "system:apiserver", "system:kube-controller-manager"]
+
+  - level: None
+    userGroups: ["system:nodes", "system:serviceaccounts:kube-system"]
+
+  # Exclude read-only operations for performance
+  - level: None
+    verbs: ["get", "watch", "list"]
+
+  # Default level for all other requests
+  - level: Metadata
+    omitStages:
+      - "RequestReceived"
+
+---
+# ConfigMap for audit webhook configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-webhook-config
+  namespace: llmoptimizer
+data:
+  webhook-config.yaml: |
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: audit-webhook
+      cluster:
+        server: https://audit-collector.llmoptimizer.svc.cluster.local:9443/audit
+        certificate-authority-data: LS0tLS1CRUdJTi... # Base64 encoded CA
+    contexts:
+    - context:
+        cluster: audit-webhook
+        user: kube-apiserver
+      name: audit-webhook
+    current-context: audit-webhook
+    users:
+    - name: kube-apiserver
+      user:
+        client-certificate-data: LS0tLS1CRUdJTi... # Base64 encoded cert
+        client-key-data: LS0tLS1CRUdJTi... # Base64 encoded key
+
+---
+# Audit log aggregation and alerting rules
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-alert-rules
+  namespace: llmoptimizer
+data:
+  alerts.yaml: |
+    groups:
+    - name: audit-alerts
+      interval: 30s
+      rules:
+      - alert: UnauthorizedSecretAccess
+        expr: |
+          sum(rate(apiserver_audit_event_total{verb=~"get|list|watch",objectRef_resource="secrets",user_username!~"system:.*"}[5m])) > 10
+        for: 2m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High rate of secret access detected"
+          description: "User {{ $labels.user_username }} is accessing secrets at an unusual rate"
+
+      - alert: PrivilegedPodCreation
+        expr: |
+          sum(apiserver_audit_event_total{verb="create",objectRef_resource="pods",requestObject_spec_securityContext_privileged="true"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Privileged pod created"
+          description: "A privileged pod was created in namespace {{ $labels.objectRef_namespace }}"
+
+      - alert: RBACModification
+        expr: |
+          sum(rate(apiserver_audit_event_total{verb=~"create|update|patch|delete",objectRef_apiGroup="rbac.authorization.k8s.io"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "RBAC modification detected"
+          description: "RBAC resource {{ $labels.objectRef_resource }} was modified by {{ $labels.user_username }}"
+
+      - alert: ExecIntoPod
+        expr: |
+          sum(apiserver_audit_event_total{verb="create",objectRef_subresource="exec"}) > 0
+        for: 1m
+        labels:
+          severity: info
+          team: security
+        annotations:
+          summary: "Pod exec detected"
+          description: "User {{ $labels.user_username }} executed into pod {{ $labels.objectRef_name }}"
+
+      - alert: SuspiciousAPIActivity
+        expr: |
+          sum(rate(apiserver_audit_event_total{responseStatus_code!="200",responseStatus_code!="201",user_username!~"system:.*"}[5m])) by (user_username) > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High rate of API errors"
+          description: "User {{ $labels.user_username }} is generating high rate of API errors"

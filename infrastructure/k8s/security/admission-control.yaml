@@ -1,0 +1,187 @@
+# Admission Control Policies using ValidatingAdmissionWebhooks
+# This ensures pods follow security best practices
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: security-validation-webhook
+webhooks:
+- name: pod.security.llmoptimizer.io
+  clientConfig:
+    service:
+      name: security-webhook-service
+      namespace: llmoptimizer
+      path: "/validate"
+    caBundle: LS0tLS1CRUdJTi... # Base64 encoded CA cert
+  rules:
+  - operations: ["CREATE", "UPDATE"]
+    apiGroups: [""]
+    apiVersions: ["v1"]
+    resources: ["pods"]
+    scope: "Namespaced"
+  namespaceSelector:
+    matchLabels:
+      security-validation: "enabled"
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail
+  timeoutSeconds: 10
+
+---
+# MutatingAdmissionWebhook to inject security defaults
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: security-defaults-webhook
+webhooks:
+- name: defaults.security.llmoptimizer.io
+  clientConfig:
+    service:
+      name: security-webhook-service
+      namespace: llmoptimizer
+      path: "/mutate"
+    caBundle: LS0tLS1CRUdJTi... # Base64 encoded CA cert
+  rules:
+  - operations: ["CREATE"]
+    apiGroups: ["apps"]
+    apiVersions: ["v1"]
+    resources: ["deployments", "daemonsets", "statefulsets"]
+    scope: "Namespaced"
+  namespaceSelector:
+    matchLabels:
+      security-defaults: "enabled"
+  admissionReviewVersions: ["v1", "v1beta1"]
+  sideEffects: None
+  failurePolicy: Fail
+
+---
+# Policy for image scanning
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-policy-config
+  namespace: llmoptimizer
+data:
+  policy.yaml: |
+    policies:
+      - name: "approved-registries"
+        rules:
+          - type: "registry"
+            allowed:
+              - "gcr.io/llmoptimizer/*"
+              - "docker.io/llmoptimizer/*"
+              - "public.ecr.aws/llmoptimizer/*"
+      - name: "vulnerability-scanning"
+        rules:
+          - type: "vulnerability"
+            severity: "CRITICAL"
+            action: "deny"
+          - type: "vulnerability"
+            severity: "HIGH"
+            action: "warn"
+      - name: "required-labels"
+        rules:
+          - type: "labels"
+            required:
+              - "app"
+              - "version"
+              - "managed-by"
+
+---
+# Falco rules for runtime security monitoring
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules
+  namespace: llmoptimizer
+data:
+  custom-rules.yaml: |
+    - rule: Unauthorized Process in Container
+      desc: Detect processes that are not in the allowed list
+      condition: >
+        spawned_process and container and
+        not proc.name in (python, node, go, java, nginx, envoy)
+      output: >
+        Unauthorized process started in container
+        (user=%user.name command=%proc.cmdline container=%container.id)
+      priority: WARNING
+      tags: [container, process]
+
+    - rule: Container Drift Detection
+      desc: Detect modifications to container filesystem
+      condition: >
+        (open_write or rename or remove) and
+        container and
+        not fd.name startswith /tmp and
+        not fd.name startswith /var/log
+      output: >
+        Container filesystem modified
+        (user=%user.name command=%proc.cmdline file=%fd.name container=%container.id)
+      priority: ERROR
+      tags: [container, filesystem]
+
+    - rule: Suspicious Network Activity
+      desc: Detect unusual network connections
+      condition: >
+        inbound and container and
+        not (fd.sport in (80, 443, 8080, 8081, 8082, 8083, 8084))
+      output: >
+        Unexpected inbound connection
+        (connection=%fd.name container=%container.id)
+      priority: WARNING
+      tags: [network, container]
+
+---
+# OpenPolicyAgent (OPA) policies
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-policies
+  namespace: llmoptimizer
+data:
+  security.rego: |
+    package kubernetes.admission
+
+    import future.keywords.contains
+    import future.keywords.if
+    import future.keywords.in
+
+    # Deny pods without security context
+    deny[msg] {
+      input.request.kind.kind == "Pod"
+      not input.request.object.spec.securityContext.runAsNonRoot
+      msg := "Pods must run as non-root user"
+    }
+
+    # Deny containers with privilege escalation
+    deny[msg] {
+      input.request.kind.kind == "Pod"
+      container := input.request.object.spec.containers[_]
+      container.securityContext.allowPrivilegeEscalation == true
+      msg := sprintf("Container %s allows privilege escalation", [container.name])
+    }
+
+    # Deny host network usage
+    deny[msg] {
+      input.request.kind.kind == "Pod"
+      input.request.object.spec.hostNetwork == true
+      msg := "Pods cannot use host network"
+    }
+
+    # Require resource limits
+    deny[msg] {
+      input.request.kind.kind == "Pod"
+      container := input.request.object.spec.containers[_]
+      not container.resources.limits.memory
+      msg := sprintf("Container %s must specify memory limits", [container.name])
+    }
+
+    # Require specific labels
+    required_labels := {"app", "version", "team"}
+    deny[msg] {
+      input.request.kind.kind in ["Deployment", "StatefulSet", "DaemonSet"]
+      provided_labels := input.request.object.metadata.labels
+      missing_labels := required_labels - {label | provided_labels[label]}
+      count(missing_labels) > 0
+      msg := sprintf("Missing required labels: %v", [missing_labels])
+    }

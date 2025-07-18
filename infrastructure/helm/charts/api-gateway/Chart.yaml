@@ -1,0 +1,16 @@
+apiVersion: v2
+name: api-gateway
+description: API Gateway for LLMOptimizer - Routes and manages all API requests
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - api-gateway
+  - microservices
+  - llmoptimizer
+home: https://github.com/llmoptimizer/api-gateway
+sources:
+  - https://github.com/llmoptimizer/api-gateway
+maintainers:
+  - name: LLMOptimizer Team
+    email: devops@llmoptimizer.com

@@ -1,0 +1,334 @@
+# Dashboard Provider Configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    
+    providers:
+    - name: 'LLMOptimizer'
+      orgId: 1
+      folder: 'LLMOptimizer'
+      folderUid: llmoptimizer
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards
+---
+# Main Service Overview Dashboard
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: monitoring
+data:
+  service-overview.json: |
+    {
+      "dashboard": {
+        "uid": "llm-service-overview",
+        "title": "LLMOptimizer Service Overview",
+        "timezone": "browser",
+        "refresh": "30s",
+        "panels": [
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "title": "Request Rate by Service",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (destination_service_name) (rate(istio_request_total{destination_service_namespace=\"llmoptimizer\"}[5m]))",
+                "legendFormat": "{{ destination_service_name }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "title": "Success Rate by Service",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (destination_service_name) (rate(istio_request_total{destination_service_namespace=\"llmoptimizer\",response_code!~\"5..\"}[5m])) / sum by (destination_service_name) (rate(istio_request_total{destination_service_namespace=\"llmoptimizer\"}[5m]))",
+                "legendFormat": "{{ destination_service_name }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "id": 3,
+            "title": "P95 Latency by Service",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum by (destination_service_name, le) (rate(istio_request_duration_milliseconds_bucket{destination_service_namespace=\"llmoptimizer\"}[5m])))",
+                "legendFormat": "{{ destination_service_name }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "id": 4,
+            "title": "Active Connections",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (destination_service_name) (istio_tcp_connections_opened_total{destination_service_namespace=\"llmoptimizer\"}) - sum by (destination_service_name) (istio_tcp_connections_closed_total{destination_service_namespace=\"llmoptimizer\"})",
+                "legendFormat": "{{ destination_service_name }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+            "id": 5,
+            "title": "Top 10 API Endpoints by Request Rate",
+            "type": "table",
+            "targets": [
+              {
+                "expr": "topk(10, sum by (method, path) (rate(api_gateway_requests_total[5m])))",
+                "format": "table",
+                "instant": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  
+  ml-service-dashboard.json: |
+    {
+      "dashboard": {
+        "uid": "llm-ml-service",
+        "title": "ML Service Performance",
+        "panels": [
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "title": "Model Predictions per Second",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (model_name, model_version) (rate(ml_service_predictions_total[5m]))",
+                "legendFormat": "{{ model_name }}-{{ model_version }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "title": "Prediction Latency Distribution",
+            "type": "heatmap",
+            "targets": [
+              {
+                "expr": "sum by (le) (rate(ml_service_prediction_duration_seconds_bucket[5m]))",
+                "format": "heatmap"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "id": 3,
+            "title": "Model Accuracy",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "ml_service_model_accuracy",
+                "legendFormat": "{{ model_name }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "id": 4,
+            "title": "GPU Utilization",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "avg by (gpu_id) (ml_service_gpu_utilization_percent)",
+                "legendFormat": "GPU {{ gpu_id }}"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  
+  content-service-dashboard.json: |
+    {
+      "dashboard": {
+        "uid": "llm-content-service",
+        "title": "Content Service Analytics",
+        "panels": [
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "title": "Content Processing Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (content_type) (rate(content_service_documents_processed_total[5m]))",
+                "legendFormat": "{{ content_type }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "title": "Average Content Quality Score",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "avg by (content_type) (content_service_quality_score)",
+                "legendFormat": "{{ content_type }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "id": 3,
+            "title": "Content Processing Queue Size",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "content_service_queue_size",
+                "legendFormat": "Queue Size"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "id": 4,
+            "title": "SEO Score Distribution",
+            "type": "bargauge",
+            "targets": [
+              {
+                "expr": "avg by (score_range) (content_service_seo_score_distribution)",
+                "instant": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  
+  security-dashboard.json: |
+    {
+      "dashboard": {
+        "uid": "llm-security",
+        "title": "Security Monitoring",
+        "panels": [
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "title": "Authentication Attempts",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (status) (rate(auth_service_login_attempts_total[5m]))",
+                "legendFormat": "{{ status }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "title": "403 Forbidden Responses",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (source_workload) (rate(istio_request_total{response_code=\"403\"}[5m]))",
+                "legendFormat": "{{ source_workload }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "id": 3,
+            "title": "mTLS Connection Status",
+            "type": "piechart",
+            "targets": [
+              {
+                "expr": "sum by (connection_security_policy) (istio_tcp_connections_opened_total)",
+                "instant": true
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "id": 4,
+            "title": "Rate Limited Requests",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (user_tier) (rate(api_gateway_rate_limited_total[5m]))",
+                "legendFormat": "{{ user_tier }}"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  
+  infrastructure-dashboard.json: |
+    {
+      "dashboard": {
+        "uid": "llm-infrastructure",
+        "title": "Infrastructure Overview",
+        "panels": [
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "id": 1,
+            "title": "CPU Usage by Namespace",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (namespace) (rate(container_cpu_usage_seconds_total{container!=\"\",pod!=\"\"}[5m]))",
+                "legendFormat": "{{ namespace }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "id": 2,
+            "title": "Memory Usage by Namespace",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum by (namespace) (container_memory_working_set_bytes{container!=\"\",pod!=\"\"})",
+                "legendFormat": "{{ namespace }}"
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+            "id": 3,
+            "title": "Pod Count by Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum by (phase) (kube_pod_status_phase{namespace=\"llmoptimizer\"})",
+                "instant": true
+              }
+            ]
+          },
+          {
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+            "id": 4,
+            "title": "PVC Usage",
+            "type": "bargauge",
+            "targets": [
+              {
+                "expr": "kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes",
+                "instant": true
+              }
+            ]
+          }
+        ]
+      }
+    }

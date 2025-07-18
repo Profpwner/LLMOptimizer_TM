@@ -1,0 +1,47 @@
+# Security Framework Requirements
+
+# Core dependencies
+redis>=4.5.0
+cryptography>=41.0.0
+pyjwt[crypto]>=2.8.0
+bcrypt>=4.0.1
+
+# Validation and security
+email-validator>=2.0.0
+phonenumbers>=8.13.0
+zxcvbn>=4.4.28
+bleach>=6.0.0
+validators>=0.20.0
+python-magic>=0.4.27
+
+# GeoIP (optional, for IP geolocation)
+geoip2>=4.7.0
+
+# AWS KMS support (optional)
+boto3>=1.28.0
+
+# HashiCorp Vault support (optional)
+hvac>=1.1.1
+
+# Web framework integration
+fastapi>=0.100.0
+starlette>=0.27.0
+uvicorn>=0.23.0
+
+# Data validation
+pydantic>=2.0.0
+jsonschema>=4.19.0
+
+# Development and testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+black>=23.7.0
+mypy>=1.4.0
+bandit>=1.7.5
+safety>=2.3.5
+semgrep>=1.0.0
+
+# Documentation
+mkdocs>=1.5.0
+mkdocs-material>=9.1.0

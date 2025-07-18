@@ -1,0 +1,253 @@
+# Telemetry v2 Configuration
+---
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: default-metrics
+  namespace: istio-system
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+    overrides:
+    - match:
+        metric: ALL_METRICS
+      disabled: false
+      tagOverrides:
+        method:
+          value: request.method | "unknown"
+        path:
+          value: request.path | "unknown"
+        response_code:
+          value: response.code | 0
+        source_app:
+          value: source.labels["app"] | "unknown"
+        destination_app:
+          value: destination.labels["app"] | "unknown"
+---
+# Custom metrics for business logic
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: custom-metrics
+  namespace: llmoptimizer
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+    dimensions:
+      request_size: request.size | 0
+      response_size: response.size | 0
+      connection_duration: connection.duration | "0ms"
+      user_tier: request.headers["x-user-tier"] | "free"
+      api_version: request.headers["x-api-version"] | "v1"
+      content_type: request.headers["content-type"] | "unknown"
+    overrides:
+    - match:
+        metric: REQUEST_COUNT
+      tagOverrides:
+        user_id:
+          value: request.headers["x-user-id"] | "anonymous"
+        organization_id:
+          value: request.headers["x-org-id"] | "none"
+    - match:
+        metric: REQUEST_DURATION
+      tagOverrides:
+        percentile_50:
+          value: response.duration | "0ms"
+        percentile_95:
+          value: response.duration | "0ms"
+        percentile_99:
+          value: response.duration | "0ms"
+---
+# Distributed tracing configuration
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: default-tracing
+  namespace: istio-system
+spec:
+  tracing:
+  - providers:
+    - name: jaeger
+    randomSamplingPercentage: 1.0  # 1% sampling for production
+---
+# Enhanced tracing for specific services
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: enhanced-tracing
+  namespace: llmoptimizer
+spec:
+  selector:
+    matchLabels:
+      app: ml-service
+  tracing:
+  - providers:
+    - name: jaeger
+    randomSamplingPercentage: 10.0  # Higher sampling for ML service
+    customTags:
+      model_name:
+        literal:
+          value: request.headers["x-model-name"] | "default"
+      model_version:
+        literal:
+          value: request.headers["x-model-version"] | "1.0"
+      prediction_confidence:
+        literal:
+          value: response.headers["x-prediction-confidence"] | "0"
+---
+# Access logs configuration
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: access-logs
+  namespace: istio-system
+spec:
+  accessLogging:
+  - providers:
+    - name: otel
+---
+# Configure OpenTelemetry provider
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opentelemetry-collector-conf
+  namespace: istio-system
+data:
+  opentelemetry-collector-config: |
+    receivers:
+      prometheus:
+        config:
+          scrape_configs:
+          - job_name: 'istio-mesh'
+            kubernetes_sd_configs:
+            - role: endpoints
+              namespaces:
+                names:
+                - istio-system
+                - llmoptimizer
+                - monitoring
+            relabel_configs:
+            - source_labels: [__meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+              action: keep
+              regex: istio-telemetry;prometheus
+      
+      zipkin:
+        endpoint: 0.0.0.0:9411
+      
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_binary:
+            endpoint: 0.0.0.0:6832
+          thrift_compact:
+            endpoint: 0.0.0.0:6831
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+    
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1024
+      
+      memory_limiter:
+        check_interval: 5s
+        limit_mib: 4096
+        spike_limit_mib: 512
+      
+      attributes:
+        actions:
+        - key: cluster
+          value: production
+          action: insert
+        - key: namespace
+          from_attribute: k8s.namespace.name
+          action: insert
+        - key: service
+          from_attribute: service.name
+          action: insert
+        - key: pod
+          from_attribute: k8s.pod.name
+          action: insert
+    
+    exporters:
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+        namespace: istio
+        const_labels:
+          cluster: 'production'
+      
+      jaeger:
+        endpoint: jaeger-collector.monitoring:14250
+        tls:
+          insecure: true
+      
+      logging:
+        loglevel: info
+    
+    service:
+      pipelines:
+        traces:
+          receivers: [zipkin, jaeger]
+          processors: [memory_limiter, batch, attributes]
+          exporters: [jaeger, logging]
+        
+        metrics:
+          receivers: [prometheus]
+          processors: [memory_limiter, batch]
+          exporters: [prometheus, logging]
+---
+# Grafana dashboard provisioning
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: istio-grafana-dashboards
+  namespace: monitoring
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+    - name: 'Istio'
+      orgId: 1
+      folder: 'Istio'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards/istio
+  
+  llmoptimizer-dashboard.json: |
+    {
+      "dashboard": {
+        "title": "LLMOptimizer Service Mesh",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "targets": [
+              {
+                "expr": "sum(rate(istio_request_total{destination_service_namespace=\"llmoptimizer\"}[5m])) by (destination_service_name)"
+              }
+            ]
+          },
+          {
+            "title": "Success Rate",
+            "targets": [
+              {
+                "expr": "sum(rate(istio_request_total{destination_service_namespace=\"llmoptimizer\",response_code!~\"5..\"}[5m])) by (destination_service_name) / sum(rate(istio_request_total{destination_service_namespace=\"llmoptimizer\"}[5m])) by (destination_service_name)"
+              }
+            ]
+          },
+          {
+            "title": "P95 Latency",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(istio_request_duration_milliseconds_bucket{destination_service_namespace=\"llmoptimizer\"}[5m])) by (destination_service_name, le))"
+              }
+            ]
+          }
+        ]
+      }
+    }

@@ -1,0 +1,112 @@
+# Main ingress gateway for LLMOptimizer
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: llmoptimizer-gateway
+  namespace: llmoptimizer
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "llmoptimizer.com"
+    - "*.llmoptimizer.com"
+    - "localhost"
+    tls:
+      httpsRedirect: true # Redirect HTTP to HTTPS
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: llmoptimizer-tls # Must be created in istio-system namespace
+    hosts:
+    - "llmoptimizer.com"
+    - "*.llmoptimizer.com"
+  - port:
+      number: 443
+      name: https-api
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: api-llmoptimizer-tls
+    hosts:
+    - "api.llmoptimizer.com"
+---
+# Gateway for monitoring tools
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: monitoring-gateway
+  namespace: monitoring
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      name: https-monitoring
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: monitoring-tls
+    hosts:
+    - "monitoring.llmoptimizer.com"
+    - "grafana.llmoptimizer.com"
+    - "prometheus.llmoptimizer.com"
+    - "jaeger.llmoptimizer.com"
+    - "kibana.llmoptimizer.com"
+---
+# Internal gateway for service-to-service communication
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: internal-gateway
+  namespace: llmoptimizer
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 15443
+      name: tls-internal
+      protocol: TLS
+    tls:
+      mode: ISTIO_MUTUAL
+    hosts:
+    - "*.llmoptimizer.svc.cluster.local"
+---
+# Egress gateway for external services
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: egress-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: egressgateway
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    hosts:
+    - "*.googleapis.com"
+    - "*.openai.com"
+    - "*.anthropic.com"
+    - "*.perplexity.ai"
+    - "*.github.com"
+    - "*.salesforce.com"
+    - "*.hubspot.com"
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*.wordpress.com"

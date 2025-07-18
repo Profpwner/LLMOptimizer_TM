@@ -1,0 +1,299 @@
+# Pod Security Standards for LLMOptimizer namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llmoptimizer
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+
+---
+# SecurityContext Template for all pods
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pod-security-context-template
+  namespace: llmoptimizer
+data:
+  security-context.yaml: |
+    # Template security context for pods
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      fsGroup: 2000
+      seccompProfile:
+        type: RuntimeDefault
+    
+    # Container security context
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      runAsNonRoot: true
+      runAsUser: 1000
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+
+---
+# PodDisruptionBudget for high availability
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api-gateway-pdb
+  namespace: llmoptimizer
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: auth-service-pdb
+  namespace: llmoptimizer
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: auth-service
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: content-service-pdb
+  namespace: llmoptimizer
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: content-service
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ml-service-pdb
+  namespace: llmoptimizer
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ml-service
+
+---
+# ResourceQuota for namespace resource limits
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: llmoptimizer-quota
+  namespace: llmoptimizer
+spec:
+  hard:
+    requests.cpu: "100"
+    requests.memory: 200Gi
+    limits.cpu: "200"
+    limits.memory: 400Gi
+    persistentvolumeclaims: "20"
+    services.loadbalancers: "5"
+    services.nodeports: "0"  # Disable NodePort services for security
+
+---
+# LimitRange for default pod/container limits
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: llmoptimizer-limit-range
+  namespace: llmoptimizer
+spec:
+  limits:
+  - default:
+      cpu: "2"
+      memory: 4Gi
+    defaultRequest:
+      cpu: 500m
+      memory: 1Gi
+    max:
+      cpu: "8"
+      memory: 16Gi
+    min:
+      cpu: 100m
+      memory: 128Mi
+    type: Container
+  - max:
+      storage: 100Gi
+    min:
+      storage: 1Gi
+    type: PersistentVolumeClaim
+
+---
+# AppArmor annotation example (for supported nodes)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: apparmor-profiles
+  namespace: llmoptimizer
+data:
+  runtime-default: |
+    # AppArmor profile annotations for pods
+    # Add to pod annotations:
+    # container.apparmor.security.beta.kubernetes.io/<container_name>: runtime/default
+
+---
+# Seccomp profile for additional security
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seccomp-profiles
+  namespace: llmoptimizer
+data:
+  audit.json: |
+    {
+      "defaultAction": "SCMP_ACT_LOG",
+      "architectures": [
+        "SCMP_ARCH_X86_64",
+        "SCMP_ARCH_X86",
+        "SCMP_ARCH_X32"
+      ],
+      "syscalls": [
+        {
+          "names": [
+            "accept",
+            "accept4",
+            "access",
+            "arch_prctl",
+            "bind",
+            "brk",
+            "clone",
+            "close",
+            "connect",
+            "dup",
+            "dup2",
+            "dup3",
+            "epoll_create",
+            "epoll_create1",
+            "epoll_ctl",
+            "epoll_wait",
+            "epoll_pwait",
+            "execve",
+            "exit",
+            "exit_group",
+            "fcntl",
+            "fstat",
+            "fstatfs",
+            "futex",
+            "getcwd",
+            "getdents",
+            "getdents64",
+            "getegid",
+            "geteuid",
+            "getgid",
+            "getgroups",
+            "getpeername",
+            "getpgrp",
+            "getpid",
+            "getppid",
+            "getpriority",
+            "getrandom",
+            "getresgid",
+            "getresuid",
+            "getrlimit",
+            "getrusage",
+            "getsid",
+            "getsockname",
+            "getsockopt",
+            "gettid",
+            "gettimeofday",
+            "getuid",
+            "ioctl",
+            "listen",
+            "lseek",
+            "lstat",
+            "madvise",
+            "memfd_create",
+            "mincore",
+            "mmap",
+            "mprotect",
+            "mremap",
+            "munmap",
+            "nanosleep",
+            "newfstatat",
+            "open",
+            "openat",
+            "pipe",
+            "pipe2",
+            "poll",
+            "ppoll",
+            "prctl",
+            "pread64",
+            "preadv",
+            "preadv2",
+            "pwrite64",
+            "pwritev",
+            "pwritev2",
+            "read",
+            "readlink",
+            "readlinkat",
+            "readv",
+            "recvfrom",
+            "recvmmsg",
+            "recvmsg",
+            "rename",
+            "renameat",
+            "renameat2",
+            "restart_syscall",
+            "rt_sigaction",
+            "rt_sigpending",
+            "rt_sigprocmask",
+            "rt_sigqueueinfo",
+            "rt_sigreturn",
+            "rt_sigsuspend",
+            "rt_sigtimedwait",
+            "rt_tgsigqueueinfo",
+            "sched_getaffinity",
+            "sched_yield",
+            "select",
+            "sendfile",
+            "sendmmsg",
+            "sendmsg",
+            "sendto",
+            "set_robust_list",
+            "set_tid_address",
+            "setgid",
+            "setgroups",
+            "setitimer",
+            "setpgid",
+            "setpriority",
+            "setresgid",
+            "setresuid",
+            "setsid",
+            "setsockopt",
+            "setuid",
+            "shutdown",
+            "sigaltstack",
+            "socket",
+            "socketpair",
+            "stat",
+            "statfs",
+            "statx",
+            "symlink",
+            "symlinkat",
+            "tgkill",
+            "umask",
+            "uname",
+            "unlink",
+            "unlinkat",
+            "wait4",
+            "waitid",
+            "write",
+            "writev"
+          ],
+          "action": "SCMP_ACT_ALLOW"
+        }
+      ]
+    }

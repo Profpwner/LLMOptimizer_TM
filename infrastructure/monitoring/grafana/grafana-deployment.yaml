@@ -1,0 +1,201 @@
+# Grafana Deployment
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: monitoring
+data:
+  grafana.ini: |
+    [server]
+    root_url = https://grafana.llmoptimizer.com
+    
+    [auth]
+    disable_login_form = false
+    disable_signout_menu = false
+    
+    [auth.anonymous]
+    enabled = false
+    
+    [auth.basic]
+    enabled = true
+    
+    [auth.generic_oauth]
+    enabled = true
+    name = LLMOptimizer OAuth
+    allow_sign_up = true
+    client_id = grafana-client
+    client_secret = ${OAUTH_CLIENT_SECRET}
+    scopes = openid profile email
+    auth_url = https://auth.llmoptimizer.com/oauth/authorize
+    token_url = https://auth.llmoptimizer.com/oauth/token
+    api_url = https://auth.llmoptimizer.com/oauth/userinfo
+    
+    [users]
+    allow_sign_up = false
+    allow_org_create = false
+    auto_assign_org = true
+    auto_assign_org_id = 1
+    auto_assign_org_role = Viewer
+    
+    [security]
+    admin_user = admin
+    admin_password = ${GRAFANA_ADMIN_PASSWORD}
+    secret_key = ${GRAFANA_SECRET_KEY}
+    
+    [snapshots]
+    external_enabled = false
+    
+    [dashboards]
+    versions_to_keep = 20
+    
+    [database]
+    type = postgres
+    host = postgresql.llmoptimizer.svc.cluster.local:5432
+    name = grafana
+    user = grafana
+    password = ${DB_PASSWORD}
+    ssl_mode = require
+    
+    [remote_cache]
+    type = redis
+    connstr = addr=redis.llmoptimizer.svc.cluster.local:6379,pool_size=100,db=0,ssl=false
+    
+    [dataproxy]
+    timeout = 300
+    keep_alive_seconds = 300
+    
+    [alerting]
+    enabled = true
+    execute_alerts = true
+    
+    [unified_alerting]
+    enabled = true
+    
+    [smtp]
+    enabled = true
+    host = smtp.gmail.com:587
+    user = ${SMTP_USER}
+    password = ${SMTP_PASSWORD}
+    from_address = alerts@llmoptimizer.com
+    from_name = LLMOptimizer Monitoring
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-secrets
+  namespace: monitoring
+type: Opaque
+stringData:
+  GRAFANA_ADMIN_PASSWORD: "changeme-admin-password"
+  GRAFANA_SECRET_KEY: "changeme-secret-key"
+  OAUTH_CLIENT_SECRET: "changeme-oauth-secret"
+  DB_PASSWORD: "changeme-db-password"
+  SMTP_USER: "alerts@llmoptimizer.com"
+  SMTP_PASSWORD: "changeme-smtp-password"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
+        runAsGroup: 472
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.2.3
+        ports:
+        - containerPort: 3000
+          name: http
+        envFrom:
+        - secretRef:
+            name: grafana-secrets
+        volumeMounts:
+        - name: config
+          mountPath: /etc/grafana
+        - name: datasources
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboards-provider
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboards
+          mountPath: /var/lib/grafana/dashboards
+        - name: storage
+          mountPath: /var/lib/grafana
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      volumes:
+      - name: config
+        configMap:
+          name: grafana-config
+      - name: datasources
+        configMap:
+          name: grafana-datasources
+      - name: dashboards-provider
+        configMap:
+          name: grafana-dashboard-provider
+      - name: dashboards
+        configMap:
+          name: grafana-dashboards
+      - name: storage
+        persistentVolumeClaim:
+          claimName: grafana-storage
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: http
+    name: http
+  selector:
+    app: grafana
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-storage
+  namespace: monitoring
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: fast-ssd

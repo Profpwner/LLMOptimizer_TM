@@ -1,0 +1,346 @@
+# Prometheus Alert Rules for LLMOptimizer
+# Optimized for 100K+ concurrent users
+
+groups:
+  - name: llmoptimizer_system
+    interval: 30s
+    rules:
+      # High Error Rate
+      - alert: HighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m])) by (service)
+            /
+            sum(rate(http_requests_total[5m])) by (service)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High error rate on {{ $labels.service }}"
+          description: "{{ $labels.service }} has error rate of {{ $value | humanizePercentage }} (threshold: 5%)"
+          runbook_url: "https://wiki.llmoptimizer.com/runbooks/high-error-rate"
+
+      # SLA Violation
+      - alert: SLAViolation
+        expr: |
+          (
+            1 - (sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])))
+          ) < 0.999
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+          pagerduty: true
+        annotations:
+          summary: "SLA violation - availability below 99.9%"
+          description: "Current availability: {{ $value | humanizePercentage }}"
+          runbook_url: "https://wiki.llmoptimizer.com/runbooks/sla-violation"
+
+      # High Response Time
+      - alert: HighResponseTime
+        expr: |
+          histogram_quantile(0.95, 
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (service, le)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High response time on {{ $labels.service }}"
+          description: "P95 response time is {{ $value }}s (threshold: 2s)"
+
+      # Pod Restart
+      - alert: PodRestartingTooOften
+        expr: |
+          increase(kube_pod_container_status_restarts_total{namespace="llmoptimizer"}[1h]) > 5
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarting too often"
+          description: "Pod has restarted {{ $value }} times in the last hour"
+
+      # High CPU Usage
+      - alert: HighCPUUsage
+        expr: |
+          (
+            100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+          ) > 90
+        for: 10m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is {{ $value | humanize }}% (threshold: 90%)"
+
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+          ) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanize }}% (threshold: 90%)"
+
+      # Disk Space Low
+      - alert: DiskSpaceLow
+        expr: |
+          (
+            100 - ((node_filesystem_avail_bytes{mountpoint="/",fstype!="rootfs"} * 100) / 
+            node_filesystem_size_bytes{mountpoint="/",fstype!="rootfs"})
+          ) > 85
+        for: 10m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Disk usage is {{ $value | humanize }}% (threshold: 85%)"
+
+      # Pod Not Ready
+      - alert: PodNotReady
+        expr: |
+          kube_pod_status_ready{namespace="llmoptimizer",condition="false"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Pod {{ $labels.pod }} is not ready"
+          description: "Pod has been not ready for 5 minutes"
+
+  - name: llmoptimizer_database
+    interval: 30s
+    rules:
+      # Database Connection Pool Exhausted
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          (
+            pgbouncer_pools_client_active{database="llmoptimizer_main"} / 
+            pgbouncer_pools_client_max_connections{database="llmoptimizer_main"}
+          ) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          team: database
+        annotations:
+          summary: "Database connection pool near exhaustion"
+          description: "Connection pool usage is {{ $value | humanizePercentage }}"
+
+      # High Database Query Time
+      - alert: HighDatabaseQueryTime
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(pgbouncer_query_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "High database query time"
+          description: "P95 query time is {{ $value }}s (threshold: 1s)"
+
+      # Database Replication Lag
+      - alert: DatabaseReplicationLag
+        expr: |
+          pg_replication_lag_seconds > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Database replication lag on {{ $labels.instance }}"
+          description: "Replication lag is {{ $value }}s (threshold: 10s)"
+
+      # Redis Memory Usage High
+      - alert: RedisMemoryUsageHigh
+        expr: |
+          (redis_memory_used_bytes / redis_memory_max_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Redis memory usage high on {{ $labels.instance }}"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+  - name: llmoptimizer_llm
+    interval: 30s
+    rules:
+      # LLM API Error Rate High
+      - alert: LLMAPIErrorRateHigh
+        expr: |
+          (
+            sum(rate(llm_api_errors_total[5m])) by (provider)
+            /
+            sum(rate(llm_api_requests_total[5m])) by (provider)
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "High LLM API error rate for {{ $labels.provider }}"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 10%)"
+
+      # LLM Response Time High
+      - alert: LLMResponseTimeHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(llm_response_duration_seconds_bucket[5m])) by (provider, le)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "High LLM response time for {{ $labels.provider }}"
+          description: "P95 response time is {{ $value }}s (threshold: 30s)"
+
+      # LLM Token Usage Rate High
+      - alert: LLMTokenUsageRateHigh
+        expr: |
+          sum(rate(llm_tokens_used_total[1h])) by (provider) > 1000000
+        for: 5m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "High token usage rate for {{ $labels.provider }}"
+          description: "Token usage rate is {{ $value | humanize }} tokens/hour"
+
+      # Semantic Analysis Queue Backed Up
+      - alert: SemanticAnalysisQueueBackedUp
+        expr: |
+          semantic_analysis_queue_size > 5000
+        for: 10m
+        labels:
+          severity: warning
+          team: ml
+        annotations:
+          summary: "Semantic analysis queue is backed up"
+          description: "Queue size is {{ $value }} (threshold: 5000)"
+
+      # Brand Visibility Score Low
+      - alert: BrandVisibilityScoreLow
+        expr: |
+          avg(brand_visibility_score) < 50
+        for: 30m
+        labels:
+          severity: info
+          team: product
+        annotations:
+          summary: "Brand visibility score is low"
+          description: "Average score is {{ $value }}% (threshold: 50%)"
+
+  - name: llmoptimizer_cache
+    interval: 30s
+    rules:
+      # Cache Hit Rate Low
+      - alert: CacheHitRateLow
+        expr: |
+          (
+            sum(rate(redis_keyspace_hits_total[5m]))
+            /
+            (sum(rate(redis_keyspace_hits_total[5m])) + sum(rate(redis_keyspace_misses_total[5m])))
+          ) < 0.8
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Cache hit rate is low"
+          description: "Hit rate is {{ $value | humanizePercentage }} (threshold: 80%)"
+
+      # Cache Eviction Rate High
+      - alert: CacheEvictionRateHigh
+        expr: |
+          sum(rate(redis_evicted_keys_total[5m])) > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High cache eviction rate"
+          description: "Evicting {{ $value | humanize }} keys/second"
+
+  - name: llmoptimizer_security
+    interval: 30s
+    rules:
+      # Authentication Failure Rate High
+      - alert: AuthenticationFailureRateHigh
+        expr: |
+          (
+            sum(rate(auth_login_attempts_total{status="failed"}[5m]))
+            /
+            sum(rate(auth_login_attempts_total[5m]))
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Failure rate is {{ $value | humanizePercentage }} (threshold: 20%)"
+
+      # Suspicious Activity Detected
+      - alert: SuspiciousActivityDetected
+        expr: |
+          sum(rate(security_suspicious_activity_total[5m])) > 10
+        for: 2m
+        labels:
+          severity: critical
+          team: security
+          pagerduty: true
+        annotations:
+          summary: "Suspicious activity detected"
+          description: "{{ $value | humanize }} suspicious events per second"
+
+      # SSL Certificate Expiry
+      - alert: SSLCertificateExpiringSoon
+        expr: |
+          (ssl_cert_expiry_timestamp_seconds - time()) / 86400 < 30
+        for: 1h
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "SSL certificate expiring soon for {{ $labels.domain }}"
+          description: "Certificate expires in {{ $value | humanize }} days"
+
+  - name: llmoptimizer_business
+    interval: 5m
+    rules:
+      # Low User Activity
+      - alert: LowUserActivity
+        expr: |
+          sum(increase(auth_active_users_total[1h])) < 100
+        for: 30m
+        labels:
+          severity: info
+          team: product
+        annotations:
+          summary: "Low user activity"
+          description: "Only {{ $value | humanize }} active users in the last hour"
+
+      # Content Optimization Rate Low
+      - alert: ContentOptimizationRateLow
+        expr: |
+          sum(rate(content_optimizations_total[1h])) * 3600 < 10
+        for: 1h
+        labels:
+          severity: info
+          team: product
+        annotations:
+          summary: "Low content optimization rate"
+          description: "Only {{ $value | humanize }} optimizations per hour"

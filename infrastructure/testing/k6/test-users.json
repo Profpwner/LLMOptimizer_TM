@@ -1,0 +1,42 @@
+[
+  {
+    "email": "loadtest1@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest2@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest3@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest4@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest5@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest6@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest7@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest8@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest9@llmoptimizer.com",
+    "password": "TestPass123!"
+  },
+  {
+    "email": "loadtest10@llmoptimizer.com",
+    "password": "TestPass123!"
+  }
+]

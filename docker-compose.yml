@@ -1,0 +1,275 @@
+version: '3.9'
+
+services:
+  # API Gateway (Go)
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-api-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENVIRONMENT=development
+      - VERSION=1.0.0
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - CONTENT_SERVICE_URL=http://content-service:8000
+      - CRAWLER_SERVICE_URL=http://crawler-service:8003
+      - ANALYTICS_SERVICE_URL=http://analytics-service:8000
+      - ML_SERVICE_URL=http://ml-service:8000
+      - INTEGRATIONS_SERVICE_URL=http://integrations-service:8000
+    depends_on:
+      - auth-service
+      - content-service
+      - crawler-service
+      - analytics-service
+      - ml-service
+      - integrations-service
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Auth Service (Python/FastAPI)
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-auth-service
+    ports:
+      - "8001:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - SECRET_KEY=your-super-secret-key-change-in-production
+      - MONGODB_URL=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - ACCESS_TOKEN_EXPIRE_MINUTES=30
+      - REFRESH_TOKEN_EXPIRE_DAYS=7
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Content Service (Python/FastAPI)
+  content-service:
+    build:
+      context: ./content-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-content-service
+    ports:
+      - "8002:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - CACHE_TTL=3600
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Crawler Service (Python/FastAPI)
+  crawler-service:
+    build:
+      context: ./crawler-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-crawler-service
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379
+      - ENABLE_WORKERS=true
+      - NUM_WORKERS=4
+    depends_on:
+      - redis
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Analytics Service (Python/FastAPI)
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-analytics-service
+    ports:
+      - "8005:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # ML Service (Python/FastAPI)
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-ml-service
+    ports:
+      - "8004:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - MONGODB_URL=mongodb://mongodb:27017
+      - REDIS_URL=redis://redis:6379
+      - MODEL_CACHE_DIR=/app/models
+      - MAX_CONTENT_LENGTH=50000
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - llmoptimizer-network
+    volumes:
+      - ml-models:/app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Integrations Service (Python/FastAPI)
+  integrations-service:
+    build:
+      context: ./integrations-service
+      dockerfile: Dockerfile
+    container_name: llmoptimizer-integrations-service
+    ports:
+      - "8005:8000"
+    environment:
+      - PORT=8000
+      - ENVIRONMENT=development
+      - SECRET_KEY=${INTEGRATIONS_SECRET_KEY:-your-secret-key-change-in-production}
+      - ENCRYPTION_KEY=${INTEGRATIONS_ENCRYPTION_KEY:-your-encryption-key-for-oauth-tokens}
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=llmoptimizer_integrations
+      - POSTGRES_URL=postgresql://llmoptimizer:llmoptimizer123@postgres:5432/llmoptimizer_integrations
+      - REDIS_URL=redis://redis:6379
+      - AUTH_SERVICE_URL=http://auth-service:8000
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-your-webhook-secret}
+      - WEBHOOK_BASE_URL=http://integrations-service:8000/api/v1/webhooks
+      # HubSpot OAuth
+      - HUBSPOT_CLIENT_ID=${HUBSPOT_CLIENT_ID:-}
+      - HUBSPOT_CLIENT_SECRET=${HUBSPOT_CLIENT_SECRET:-}
+      - HUBSPOT_REDIRECT_URI=${HUBSPOT_REDIRECT_URI:-http://localhost:8005/api/v1/integrations/hubspot/callback}
+      # Salesforce OAuth
+      - SALESFORCE_CLIENT_ID=${SALESFORCE_CLIENT_ID:-}
+      - SALESFORCE_CLIENT_SECRET=${SALESFORCE_CLIENT_SECRET:-}
+      - SALESFORCE_REDIRECT_URI=${SALESFORCE_REDIRECT_URI:-http://localhost:8005/api/v1/integrations/salesforce/callback}
+      # GitHub OAuth
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GITHUB_REDIRECT_URI=${GITHUB_REDIRECT_URI:-http://localhost:8005/api/v1/integrations/github/callback}
+    depends_on:
+      - mongodb
+      - redis
+      - postgres
+      - auth-service
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # MongoDB
+  mongodb:
+    image: mongo:7.0
+    container_name: llmoptimizer-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin123
+      - MONGO_INITDB_DATABASE=llmoptimizer
+    volumes:
+      - mongodb-data:/data/db
+      - ./infrastructure/mongodb/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Redis
+  redis:
+    image: redis:7.2-alpine
+    container_name: llmoptimizer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # PostgreSQL (for future use with structured data)
+  postgres:
+    image: postgres:16-alpine
+    container_name: llmoptimizer-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=llmoptimizer
+      - POSTGRES_PASSWORD=llmoptimizer123
+      - POSTGRES_DB=llmoptimizer
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - llmoptimizer-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llmoptimizer"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+networks:
+  llmoptimizer-network:
+    driver: bridge
+
+volumes:
+  mongodb-data:
+  redis-data:
+  postgres-data:
+  ml-models:

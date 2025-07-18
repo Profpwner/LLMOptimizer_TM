@@ -1,0 +1,137 @@
+# Grafana Datasources Configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    
+    deleteDatasources:
+    - name: Prometheus
+      orgId: 1
+    
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      orgId: 1
+      url: http://prometheus:9090
+      isDefault: true
+      version: 1
+      editable: false
+      jsonData:
+        httpMethod: POST
+        timeInterval: 30s
+        queryTimeout: 300s
+        manageAlerts: true
+        alertmanagerUid: alertmanager
+        prometheusType: Prometheus
+        prometheusVersion: 2.40.0
+        cacheLevel: 'High'
+        disableMetricsLookup: false
+        incrementalQuerying: true
+        incrementalQueryOverlapWindow: 10m
+    
+    - name: Jaeger
+      type: jaeger
+      access: proxy
+      orgId: 1
+      url: http://jaeger-query:16686
+      editable: false
+      jsonData:
+        tracesToLogs:
+          datasourceUid: loki
+          tags: ['job', 'instance', 'pod', 'namespace']
+          mappedTags: [{ key: 'service.name', value: 'service' }]
+          mapTagNamesEnabled: true
+        tracesToMetrics:
+          datasourceUid: prometheus
+          tags: [{ key: 'service.name', value: 'service' }]
+          queries:
+          - name: 'Request Rate'
+            query: 'sum(rate(istio_request_total{destination_service_name="$service"}[5m]))'
+          - name: 'Error Rate'
+            query: 'sum(rate(istio_request_total{destination_service_name="$service", response_code=~"5.."}[5m]))'
+        nodeGraph:
+          enabled: true
+        traceQuery:
+          timeShiftEnabled: true
+          spanStartTimeShift: '-1h'
+          spanEndTimeShift: '1h'
+        spanBar:
+          type: 'Tag'
+          tag: 'http.status_code'
+    
+    - name: Loki
+      type: loki
+      access: proxy
+      orgId: 1
+      url: http://loki:3100
+      editable: false
+      jsonData:
+        derivedFields:
+        - datasourceUid: jaeger
+          matcherRegex: '"trace_id":"(\w+)"'
+          name: TraceID
+          url: '$${__value.raw}'
+        - datasourceUid: jaeger
+          matcherRegex: '"span_id":"(\w+)"'
+          name: SpanID
+          url: '$${__value.raw}'
+        maxLines: 1000
+        alertingEnabled: true
+    
+    - name: Elasticsearch
+      type: elasticsearch
+      access: proxy
+      orgId: 1
+      url: http://elasticsearch:9200
+      database: "llmoptimizer-*"
+      editable: false
+      jsonData:
+        esVersion: "8.11.0"
+        includeFrozen: false
+        logLevelField: "level"
+        logMessageField: "message"
+        maxConcurrentShardRequests: 5
+        timeField: "@timestamp"
+    
+    - name: AlertManager
+      type: alertmanager
+      access: proxy
+      orgId: 1
+      url: http://alertmanager:9093
+      uid: alertmanager
+      editable: false
+      jsonData:
+        implementation: prometheus
+    
+    - name: PostgreSQL
+      type: postgres
+      access: proxy
+      orgId: 1
+      url: postgresql.llmoptimizer.svc.cluster.local:5432
+      database: llmoptimizer
+      user: grafana_reader
+      editable: false
+      jsonData:
+        sslmode: 'require'
+        postgresVersion: 1500
+        timescaledb: false
+      secureJsonData:
+        password: ${DB_READER_PASSWORD}
+    
+    - name: Redis
+      type: redis-datasource
+      access: proxy
+      orgId: 1
+      url: redis://redis.llmoptimizer.svc.cluster.local:6379
+      editable: false
+      jsonData:
+        poolSize: 10
+        timeout: 30
+        pingInterval: 60
+        pipelineWindow: 0

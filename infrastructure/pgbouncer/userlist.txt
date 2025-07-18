@@ -1,0 +1,3 @@
+"llmoptimizer_app" "md5<password_hash>"
+"pgbouncer_admin" "md5<password_hash>"
+"pgbouncer_stats" "md5<password_hash>"

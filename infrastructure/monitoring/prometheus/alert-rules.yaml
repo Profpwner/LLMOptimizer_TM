@@ -1,0 +1,211 @@
+# Alert Rules
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: llmoptimizer-alerts
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: service_health
+    interval: 30s
+    rules:
+    # High error rate alert
+    - alert: HighErrorRate
+      expr: |
+        (
+          sum by (destination_service_name, destination_service_namespace) (
+            rate(istio_request_total{response_code=~"5.."}[5m])
+          ) /
+          sum by (destination_service_name, destination_service_namespace) (
+            rate(istio_request_total[5m])
+          )
+        ) > 0.05
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate detected for {{ $labels.destination_service_name }}"
+        description: "Service {{ $labels.destination_service_name }} has error rate of {{ $value | humanizePercentage }} (threshold: 5%)"
+    
+    # Critical error rate alert
+    - alert: CriticalErrorRate
+      expr: |
+        (
+          sum by (destination_service_name, destination_service_namespace) (
+            rate(istio_request_total{response_code=~"5.."}[5m])
+          ) /
+          sum by (destination_service_name, destination_service_namespace) (
+            rate(istio_request_total[5m])
+          )
+        ) > 0.10
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical error rate for {{ $labels.destination_service_name }}"
+        description: "Service {{ $labels.destination_service_name }} has critical error rate of {{ $value | humanizePercentage }} (threshold: 10%)"
+    
+    # High latency alert
+    - alert: HighLatency
+      expr: |
+        histogram_quantile(0.95,
+          sum by (destination_service_name, destination_service_namespace, le) (
+            rate(istio_request_duration_milliseconds_bucket[5m])
+          )
+        ) > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High latency detected for {{ $labels.destination_service_name }}"
+        description: "P95 latency for {{ $labels.destination_service_name }} is {{ $value }}ms (threshold: 1000ms)"
+    
+    # Service down alert
+    - alert: ServiceDown
+      expr: |
+        up{job=~".*-service"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Service {{ $labels.job }} is down"
+        description: "Service {{ $labels.job }} has been down for more than 1 minute"
+  
+  - name: resource_alerts
+    interval: 30s
+    rules:
+    # High CPU usage
+    - alert: HighCPUUsage
+      expr: |
+        (
+          sum by (namespace, pod) (
+            rate(container_cpu_usage_seconds_total{container!="", pod!=""}[5m])
+          ) / sum by (namespace, pod) (
+            kube_pod_container_resource_limits{resource="cpu"}
+          )
+        ) > 0.80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High CPU usage for pod {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is using {{ $value | humanizePercentage }} of CPU limit"
+    
+    # High memory usage
+    - alert: HighMemoryUsage
+      expr: |
+        (
+          sum by (namespace, pod) (
+            container_memory_working_set_bytes{container!="", pod!=""}
+          ) / sum by (namespace, pod) (
+            kube_pod_container_resource_limits{resource="memory"}
+          )
+        ) > 0.80
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage for pod {{ $labels.pod }}"
+        description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is using {{ $value | humanizePercentage }} of memory limit"
+    
+    # Pod OOMKilled
+    - alert: PodOOMKilled
+      expr: |
+        kube_pod_container_status_terminated_reason{reason="OOMKilled"} > 0
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod {{ $labels.pod }} was OOMKilled"
+        description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} was killed due to OOM"
+  
+  - name: business_alerts
+    interval: 60s
+    rules:
+    # Low authentication success rate
+    - alert: LowAuthSuccessRate
+      expr: |
+        llmoptimizer:auth_success_rate < 0.95
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Low authentication success rate"
+        description: "Authentication success rate is {{ $value | humanizePercentage }} (threshold: 95%)"
+    
+    # Content processing backlog
+    - alert: ContentProcessingBacklog
+      expr: |
+        content_service_queue_size > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Large content processing backlog"
+        description: "Content processing queue has {{ $value }} items (threshold: 1000)"
+    
+    # ML service prediction failures
+    - alert: MLPredictionFailures
+      expr: |
+        rate(ml_service_predictions_total{status="failure"}[5m]) > 0.1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High ML prediction failure rate"
+        description: "ML prediction failure rate is {{ $value }} per second"
+  
+  - name: slo_alerts
+    interval: 30s
+    rules:
+    # SLO violation warning
+    - alert: SLOViolationWarning
+      expr: |
+        slo:error_budget_burn_rate > 1
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: "SLO error budget burn rate high"
+        description: "Error budget is being consumed at {{ $value }}x the expected rate"
+    
+    # SLO violation critical
+    - alert: SLOViolationCritical
+      expr: |
+        slo:error_budget_burn_rate > 10
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Critical SLO violation"
+        description: "Error budget is being consumed at {{ $value }}x the expected rate - immediate action required"
+  
+  - name: security_alerts
+    interval: 30s
+    rules:
+    # Suspicious authentication activity
+    - alert: SuspiciousAuthActivity
+      expr: |
+        rate(auth_service_login_attempts_total{status="failure"}[5m]) > 10
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Suspicious authentication activity detected"
+        description: "Failed login attempts rate is {{ $value }} per second"
+    
+    # Unauthorized access attempts
+    - alert: UnauthorizedAccessAttempts
+      expr: |
+        sum by (source_workload) (
+          rate(istio_request_total{response_code="403"}[5m])
+        ) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Unauthorized access attempts from {{ $labels.source_workload }}"
+        description: "Workload {{ $labels.source_workload }} is receiving {{ $value }} 403 responses per second"

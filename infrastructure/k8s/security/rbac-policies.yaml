@@ -1,0 +1,306 @@
+# RBAC Configuration for LLMOptimizer
+# Service Accounts
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api-gateway
+  namespace: llmoptimizer
+  labels:
+    app: api-gateway
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: auth-service
+  namespace: llmoptimizer
+  labels:
+    app: auth-service
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: content-service
+  namespace: llmoptimizer
+  labels:
+    app: content-service
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: analytics-service
+  namespace: llmoptimizer
+  labels:
+    app: analytics-service
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ml-service
+  namespace: llmoptimizer
+  labels:
+    app: ml-service
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crawler-service
+  namespace: llmoptimizer
+  labels:
+    app: crawler-service
+
+---
+# ClusterRole for API Gateway (needs to access other services)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: api-gateway-role
+rules:
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["api-gateway-config"]
+
+---
+# Role for Auth Service (database access)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: auth-service-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+  resourceNames: ["auth-db-secret", "jwt-secret", "oauth-secrets"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["auth-config"]
+
+---
+# Role for Content Service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: content-service-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+  resourceNames: ["content-db-secret", "storage-secret"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["content-config"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "create", "update"]
+
+---
+# Role for ML Service (needs GPU resources)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ml-service-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+  resourceNames: ["ml-api-keys", "model-storage-secret"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["ml-config", "model-config"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "get", "list", "watch", "delete"]
+
+---
+# Role for Analytics Service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: analytics-service-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+  resourceNames: ["analytics-db-secret"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["analytics-config"]
+
+---
+# Role for Crawler Service
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crawler-service-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update"]
+  resourceNames: ["crawler-config", "crawler-state"]
+- apiGroups: ["batch"]
+  resources: ["cronjobs", "jobs"]
+  verbs: ["create", "get", "list", "watch", "update", "delete"]
+
+---
+# RoleBindings
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: api-gateway-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: api-gateway-role
+subjects:
+- kind: ServiceAccount
+  name: api-gateway
+  namespace: llmoptimizer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: auth-service-binding
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: auth-service-role
+subjects:
+- kind: ServiceAccount
+  name: auth-service
+  namespace: llmoptimizer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: content-service-binding
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: content-service-role
+subjects:
+- kind: ServiceAccount
+  name: content-service
+  namespace: llmoptimizer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ml-service-binding
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ml-service-role
+subjects:
+- kind: ServiceAccount
+  name: ml-service
+  namespace: llmoptimizer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: analytics-service-binding
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: analytics-service-role
+subjects:
+- kind: ServiceAccount
+  name: analytics-service
+  namespace: llmoptimizer
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crawler-service-binding
+  namespace: llmoptimizer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crawler-service-role
+subjects:
+- kind: ServiceAccount
+  name: crawler-service
+  namespace: llmoptimizer
+
+---
+# Developer Role for namespace access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: ["", "apps", "batch", "networking.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods/log", "pods/exec", "pods/portforward"]
+  verbs: ["get", "list", "create"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]
+  verbs: ["update"]
+
+---
+# Admin Role for namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: admin-role
+  namespace: llmoptimizer
+rules:
+- apiGroups: ["*"]
+  resources: ["*"]
+  verbs: ["*"]
+
+---
+# Audit Role for compliance
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: audit-role
+rules:
+- apiGroups: [""]
+  resources: ["events", "pods", "pods/log", "services", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["audit.k8s.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
