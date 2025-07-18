@@ -42,7 +42,7 @@ gensim==4.3.2
 # Schema & Knowledge Graph
 rdflib==7.0.0
 networkx==3.2.1
-py2neo==2021.2.3
+py2neo==2021.2.4
 
 # Message Queue
 pika==1.3.2

@@ -8,7 +8,6 @@ import {
   FormControl,
   InputLabel,
   Chip,
-  Grid,
   Paper,
   Typography,
   Alert,
@@ -17,6 +16,7 @@ import {
   IconButton,
   Tooltip
 } from '@mui/material';
+import GridLegacyLegacy from '@mui/material/GridLegacyLegacy';
 import SendIcon from '@mui/icons-material/Send';
 import PreviewIcon from '@mui/icons-material/Preview';
 import ClearIcon from '@mui/icons-material/Clear';
@@ -178,8 +178,8 @@ export default function DirectContentInput() {
 
   return (
     <Box component="form" onSubmit={handleSubmit}>
-      <Grid container spacing={3}>
-        <Grid item xs={12}>
+      <GridLegacy container spacing={3}>
+        <GridLegacy item xs={12}>
           <TextField
             fullWidth
             label="Title"
@@ -188,9 +188,9 @@ export default function DirectContentInput() {
             onChange={(e) => setFormData(prev => ({ ...prev, title: e.target.value }))}
             required
           />
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12} md={6}>
+        <GridLegacy item xs={12} md={6}>
           <FormControl fullWidth>
             <InputLabel>Content Type</InputLabel>
             <Select
@@ -206,9 +206,9 @@ export default function DirectContentInput() {
               <MenuItem value="landing_page">Landing Page</MenuItem>
             </Select>
           </FormControl>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12} md={6}>
+        <GridLegacy item xs={12} md={6}>
           <TextField
             fullWidth
             label="Target Audience"
@@ -217,9 +217,9 @@ export default function DirectContentInput() {
             onChange={(e) => setFormData(prev => ({ ...prev, targetAudience: e.target.value }))}
             placeholder="e.g., Tech professionals, Marketing teams"
           />
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Typography variant="subtitle2" gutterBottom>
             Content Editor
           </Typography>
@@ -245,9 +245,9 @@ export default function DirectContentInput() {
               }}
             />
           </Paper>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <TextField
             fullWidth
             label="Keywords (press Enter to add)"
@@ -267,25 +267,25 @@ export default function DirectContentInput() {
               />
             ))}
           </Box>
-        </Grid>
+        </GridLegacy>
 
         {error && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="error" onClose={() => setError(null)}>
               {error}
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
         {isSuccess && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="success">
               Content submitted successfully! It will be processed for optimization.
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
             <Button
               variant="outlined"
@@ -310,10 +310,10 @@ export default function DirectContentInput() {
               {isLoading ? 'Submitting...' : 'Submit Content'}
             </Button>
           </Box>
-        </Grid>
+        </GridLegacy>
 
         {showPreview && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <ContentPreview
               title={formData.title}
               content={formData.content}
@@ -321,9 +321,9 @@ export default function DirectContentInput() {
               keywords={formData.keywords}
               targetAudience={formData.targetAudience}
             />
-          </Grid>
+          </GridLegacy>
         )}
-      </Grid>
+      </GridLegacy>
     </Box>
   );
 }

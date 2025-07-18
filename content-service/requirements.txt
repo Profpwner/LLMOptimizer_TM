@@ -3,7 +3,7 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 motor==3.3.2
-redis==5.0.1
+redis==4.6.0
 prometheus-client==0.19.0
 python-json-logger==2.0.7
 httpx==0.25.2
@@ -50,4 +50,4 @@ pandas==2.1.4
 
 # Schema and SEO
 schema==0.7.5
-python-seo-analyzer==0.1.5
+# python-seo-analyzer==0.1.5  # Not needed - using custom implementation

@@ -1,7 +1,7 @@
 """Tests for JWT token functionality."""
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
 from freezegun import freeze_time
 
@@ -26,7 +26,7 @@ class TestTokenService:
         decoded = token_service.decode_token(token)
         assert decoded.sub == user_id
         assert decoded.type == TokenType.ACCESS
-        assert decoded.exp > datetime.utcnow()
+        assert decoded.exp > datetime.now(timezone.utc)
     
     def test_create_refresh_token(self, token_service: TokenService):
         """Test refresh token creation."""
@@ -40,7 +40,7 @@ class TestTokenService:
         decoded = token_service.decode_token(token)
         assert decoded.sub == user_id
         assert decoded.type == TokenType.REFRESH
-        assert decoded.exp > datetime.utcnow()
+        assert decoded.exp > datetime.now(timezone.utc)
     
     def test_create_mfa_token(self, token_service: TokenService):
         """Test MFA token creation."""
@@ -50,7 +50,7 @@ class TestTokenService:
         decoded = token_service.decode_token(token)
         assert decoded.sub == user_id
         assert decoded.type == TokenType.MFA
-        assert decoded.exp > datetime.utcnow()
+        assert decoded.exp > datetime.now(timezone.utc)
     
     def test_create_email_verification_token(self, token_service: TokenService):
         """Test email verification token creation."""

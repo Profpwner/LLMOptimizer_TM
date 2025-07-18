@@ -12,7 +12,6 @@ import {
   ListItemText,
   LinearProgress,
   Chip,
-  Grid,
   FormControl,
   InputLabel,
   Select,
@@ -25,6 +24,7 @@ import {
   TableRow,
   TableContainer
 } from '@mui/material';
+import GridLegacyLegacy from '@mui/material/GridLegacyLegacy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -210,8 +210,8 @@ export default function BatchUpload() {
 
   return (
     <Box>
-      <Grid container spacing={3}>
-        <Grid item xs={12}>
+      <GridLegacyLegacy container spacing={3}>
+        <GridLegacyLegacy item xs={12}>
           <Typography variant="body2" color="text.secondary" gutterBottom>
             Upload CSV, TXT, or JSON files containing multiple content items for batch processing.
             Maximum file size: 10MB.
@@ -224,9 +224,9 @@ export default function BatchUpload() {
           >
             Download CSV Template
           </Button>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12} md={6}>
+        <GridLegacy item xs={12} md={6}>
           <FormControl fullWidth>
             <InputLabel>Default Content Type</InputLabel>
             <Select
@@ -240,9 +240,9 @@ export default function BatchUpload() {
               <MenuItem value="email">Email</MenuItem>
             </Select>
           </FormControl>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Paper
             variant="outlined"
             onDragEnter={handleDrag}
@@ -283,10 +283,10 @@ export default function BatchUpload() {
               </Button>
             </label>
           </Paper>
-        </Grid>
+        </GridLegacy>
 
         {files.length > 0 && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <TableContainer component={Paper} variant="outlined">
               <Table>
                 <TableHead>
@@ -352,26 +352,26 @@ export default function BatchUpload() {
                 </TableBody>
               </Table>
             </TableContainer>
-          </Grid>
+          </GridLegacy>
         )}
 
         {error && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="error" onClose={() => setError(null)}>
               <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{error}</pre>
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
         {completedFiles > 0 && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="success">
               Successfully uploaded {completedFiles} file{completedFiles > 1 ? 's' : ''}!
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               variant="contained"
@@ -382,8 +382,8 @@ export default function BatchUpload() {
               {isLoading ? 'Uploading...' : `Upload ${pendingFiles} File${pendingFiles !== 1 ? 's' : ''}`}
             </Button>
           </Box>
-        </Grid>
-      </Grid>
+        </GridLegacy>
+      </GridLegacy>
     </Box>
   );
 }

@@ -13,13 +13,13 @@ import {
   Alert,
   CircularProgress,
   Chip,
-  Grid,
   FormControl,
   InputLabel,
   Select,
   MenuItem,
   LinearProgress
 } from '@mui/material';
+import GridLegacyLegacy from '@mui/material/GridLegacyLegacy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddLinkIcon from '@mui/icons-material/AddLink';
 import SendIcon from '@mui/icons-material/Send';
@@ -185,15 +185,15 @@ export default function URLContentInput() {
 
   return (
     <Box>
-      <Grid container spacing={3}>
-        <Grid item xs={12}>
+      <GridLegacy container spacing={3}>
+        <GridLegacy item xs={12}>
           <Typography variant="body2" color="text.secondary" gutterBottom>
             Extract content from web pages by providing their URLs. The system will automatically
             scrape and process the content for optimization.
           </Typography>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12} md={8}>
+        <GridLegacy item xs={12} md={8}>
           <TextField
             fullWidth
             label="Enter URL"
@@ -205,9 +205,9 @@ export default function URLContentInput() {
             error={!!validationError}
             helperText={validationError}
           />
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12} md={4}>
+        <GridLegacy item xs={12} md={4}>
           <FormControl fullWidth>
             <InputLabel>Content Type</InputLabel>
             <Select
@@ -221,9 +221,9 @@ export default function URLContentInput() {
               <MenuItem value="landing_page">Landing Page</MenuItem>
             </Select>
           </FormControl>
-        </Grid>
+        </GridLegacy>
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Button
             variant="outlined"
             startIcon={<AddLinkIcon />}
@@ -232,10 +232,10 @@ export default function URLContentInput() {
           >
             Add URL
           </Button>
-        </Grid>
+        </GridLegacy>
 
         {urls.length > 0 && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Paper variant="outlined">
               <Box sx={{ p: 2 }}>
                 <Typography variant="subtitle2" gutterBottom>
@@ -282,26 +282,26 @@ export default function URLContentInput() {
                 </List>
               </Box>
             </Paper>
-          </Grid>
+          </GridLegacy>
         )}
 
         {error && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="error" onClose={() => setError(null)}>
               {error}
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
         {completedCount > 0 && (
-          <Grid item xs={12}>
+          <GridLegacy item xs={12}>
             <Alert severity="success">
               Successfully processed {completedCount} URL{completedCount > 1 ? 's' : ''}!
             </Alert>
-          </Grid>
+          </GridLegacy>
         )}
 
-        <Grid item xs={12}>
+        <GridLegacy item xs={12}>
           <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
             <Button
               variant="contained"
@@ -312,8 +312,8 @@ export default function URLContentInput() {
               {isLoading ? 'Processing...' : `Process ${urls.length} URL${urls.length !== 1 ? 's' : ''}`}
             </Button>
           </Box>
-        </Grid>
-      </Grid>
+        </GridLegacy>
+      </GridLegacy>
     </Box>
   );
 }

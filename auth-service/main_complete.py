@@ -81,7 +81,7 @@ app = FastAPI(
 app.add_middleware(SecurityHeadersMiddleware)
 
 # Add rate limiting middleware
-app.add_middleware(RateLimiterMiddleware)
+# app.add_middleware(RateLimiterMiddleware)  # TODO: Implement middleware wrapper
 
 # Add trusted host middleware
 app.add_middleware(
